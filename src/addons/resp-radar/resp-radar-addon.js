@@ -1,0 +1,715 @@
+(function () {
+  'use strict';
+
+  const ADDON_ID = 'resp-radar';
+  const TOAST_CLASS = 'rzp-resp-radar-toast';
+  const STYLE_ID = 'rzp-resp-radar-style';
+  const PANEL_ID = 'rzp-resp-radar-settings';
+  const STORAGE_KEY = 'rzp_resp_radar_settings';
+
+  const DEFAULT_SETTINGS = {
+    position: 'bottom-center',
+    refreshMs: 2000
+  };
+
+  const POSITIONS = [
+    { value: 'top-left', label: 'Gora lewo' },
+    { value: 'top-center', label: 'Gora srodek' },
+    { value: 'top-right', label: 'Gora prawo' },
+    { value: 'middle-left', label: 'Srodek lewo' },
+    { value: 'middle-center', label: 'Srodek' },
+    { value: 'middle-right', label: 'Srodek prawo' },
+    { value: 'bottom-left', label: 'Dol lewo' },
+    { value: 'bottom-center', label: 'Dol srodek' },
+    { value: 'bottom-right', label: 'Dol prawo' }
+  ];
+
+  const REFRESH_OPTIONS = [1000, 2000, 5000, 10000, 20000];
+
+  const ELITE_II_DATA = {
+    'Grota Dzikiego Kota': 'Mushita',
+    'Las Tropicieli': 'Kotołak Tropiciel',
+    'Przeklęta Strażnica - podziemia p.2 s.1': 'Shae Phu',
+    'Schowek na Łupy': 'Zorg Jednooki Baron',
+    'Podmokła Dolina': 'Władca rzek',
+    'Jaskinia Pogardy': 'Gobbos',
+    'Pieczara Kwiku - sala 2': 'Tyrtajos',
+    'Skalne Turnie': 'Tollok Shimger',
+    'Stary Kupiecki Trakt': 'Szczęt alias Gładki',
+    'Mokra Grota p.2': 'Agar',
+    'Stare Wyrobisko p.3': 'Razuglag Oklash',
+    'Lazurytowa Grota p.4': 'Foverk Turrim',
+    'Kopalnia Kapiącego Miodu p.2 - sala Owadziej Matki': 'Owadzia Matka',
+    'Jaskinia Gnollich Szamanów - komnata Kozuga': 'Furruk Kozug',
+    'Namiot Vari Krugera': 'Vari Kruger',
+    'Kamienna Jaskinia - sala 3': 'Jotun',
+    'Głębokie Skałki p.4': 'Tollok Utumutu',
+    'Głębokie Skałki p.3': 'Tollok Atamatu',
+    'Krypty Dusz Śniegu p.3 - komnata Lisza': 'Lisz',
+    'Erem Czarnego Słońca p.5': 'Grabarz świątynny',
+    'Firnowa Grota p.2 s.1': 'Wielka Stopa',
+    'Świątynia Andarum - zbrojownia': 'Podły zbrojmistrz',
+    'Wylęgarnia Choukkerów p.1': 'Choukker',
+    'Kopalnia Margorii': 'Nadzorczyni krasnoludów',
+    'Margoria - Sala Królewska': 'Morthen',
+    'Zapomniany Święty Gaj p.3': 'Leśne Widmo',
+    'Grota Samotnych Dusz p.6': 'Żelazoręki Ohydziarz',
+    'Kamienna Strażnica - Sanktuarium': 'Goplana',
+    'Zagrzybiałe Ścieżki p.3': 'Gnom Figlid',
+    'Dolina Centaurów': 'Centaur Zyfryd',
+    'Namiot Kambiona': 'Kambion',
+    'Podziemia Zniszczonej Wieży p.5': 'Jertek Moxos',
+    'Skalne Cmentarzysko p.4': 'Łowca czaszek',
+    'Piramida Pustynnego Władcy p.3': 'Ozirus Władca Hieroglifów',
+    'Jama Morskiej Macki p.1 - sala 3': 'Morski potwór',
+    'Opuszczony statek - pokład': 'Krab pustelnik',
+    'Twierdza Rogogłowych - Sala Byka': 'Borgoros Garamir III',
+    'Wulkan Politraki p.1 - sala 3': 'Ifryt',
+    'Piaszczysta Grota p.1 - sala 2': 'Eol',
+    'Kopalnia Żółtego Kruszcu p.2 - sala 2': 'Grubber Ochlaj',
+    'Kuźnia Worundriela - Komnata Żaru': 'Mistrz Worundriel',
+    'Chata wójta Fistuły p.1': 'Wójt Fistuła',
+    'Chata Teściowej': 'Teściowa Rumcajsa',
+    'Laboratorium Adariel': 'Adariel',
+    'Grota Orczej Hordy p.2 s.3': 'Burkog Lorulk',
+    'Grota Orczych Szamanów p.3 s.1': 'Sheba Orcza Szamanka',
+    'Nawiedzone Kazamaty p.4': 'Duch Władcy Klanów',
+    'Sala Królewska': 'Lusgrathera Królowa Pramatka',
+    'Kryształowa Grota - Sala Smutku': 'Królowa Śniegu',
+    'Ogrza Kawerna p.4': 'Ogr Stalowy Pazur',
+    'Krypty Bezsennych p.3': 'Torunia Ankelwald',
+    'Skarpa Trzech Słów': 'Pięknotka Mięsożerna',
+    'Przysiółek Valmirów': 'Breheret Żelazny Łeb',
+    'Starodrzew Przedwiecznych p.2': 'Cerasus',
+    'Szlamowe Kanały p.2 - sala 3': 'Mysiur Myświórowy Król',
+    'Zalana Grota': 'Czempion Furboli',
+    'Erem Aldiphrina': "Al'diphrin Ilythirahel",
+    'Ołtarz Pajęczej Bogini': 'Marlloth Malignitas',
+    'Gnijące Topielisko': 'Arytodam olbrzymi',
+    'Jaszczurze Korytarze p.2 - sala 5': 'Mocny Maddoks',
+    'Gardziel Podgnitych Mchów p.3': 'Fangaj',
+    'Źródło Zakorzenionego Ludu': 'Dendroculus',
+    'Złota Góra p.3 - sala 2': 'Tolypeutes',
+    'Chantli Cuaitla Citlalina': 'Cuaitl Citlalin',
+    'Zachodni Mictlan p.9': 'Yaotl',
+    'Wschodni Mictlan p.9': 'Quetzalcoatl',
+    'Siedlisko Przyjemnej Woni - źródło': 'Wabicielka',
+    'Potępione Zamczysko - pracownia': 'Pogardliwa Sybilla',
+    'Katakumby Gwałtownej Śmierci': 'Chopesz',
+    'Grobowiec Seta': 'Neferkar Set',
+    'Urwisko Vapora': 'Terrozaur',
+    'Drzewo Życia p.3': 'Nymphemonia',
+    'Sala Lodowej Magii': 'Artenius',
+    'Sala Mroźnych Strzał': 'Furion',
+    'Sala Mroźnych Szeptów': 'Zorin'
+  };
+
+  const TITAN_DATA = {
+    'Migotliwa Pieczara': 'Dziewicza Orlica',
+    'Grota Caerbannoga - leże bestii': 'Zabójczy Królik',
+    'Bandyckie Chowisko - skarbiec': 'Renegat Baulus',
+    'Wulkan Politraki - Piekielne Czeluście': 'Piekielny Arcymag',
+    'Lokum Złych Goblinów - pracownia': 'Versus Zoons',
+    'Źródło Wspomnień': 'Łowczyni Wspomnień',
+    'Komnata Krwawych Obrzędów': 'Przyzywacz Demonów',
+    'Nora Jaszczurzych Koszmarów - źródło': 'Maddok Magua',
+    'Teotihuacan': 'Tezcatlipoca',
+    'Sala Zrujnowanej Świątyni': 'Barbatos Smoczy Strażnik',
+    'Sala Tronowa': 'Tanroth'
+  };
+
+  const state = {
+    enabled: false,
+    visible: true,
+    settings: { ...DEFAULT_SETTINGS },
+    lootlogTimers: {},
+    currentMapName: null,
+    refreshIntervalId: null,
+    resizeHandlerBound: false,
+    matherWarningShown: false
+  };
+
+  function loadSettings() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
+      const refreshMs = Number(parsed?.refreshMs);
+      return {
+        position: POSITIONS.some((p) => p.value === parsed?.position)
+          ? parsed.position
+          : DEFAULT_SETTINGS.position,
+        refreshMs: REFRESH_OPTIONS.includes(refreshMs) ? refreshMs : DEFAULT_SETTINGS.refreshMs
+      };
+    } catch (error) {
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  function saveSettings() {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state.settings));
+    } catch (error) {}
+  }
+
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      .${TOAST_CLASS} {
+        position: fixed;
+        background: rgba(8, 20, 12, 0.92);
+        border: 1px solid rgba(52, 211, 100, 0.3);
+        color: #d4f0dc;
+        border-radius: 8px;
+        padding: 7px 11px;
+        font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
+        font-size: 12px;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.42);
+        z-index: 18;
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      #${PANEL_ID} {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        min-width: 280px;
+        background: linear-gradient(180deg, rgba(6, 16, 10, 0.97), rgba(10, 24, 14, 0.96));
+        border: 1px solid rgba(52, 211, 100, 0.26);
+        border-radius: 10px;
+        color: #d4f0dc;
+        font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.58);
+        z-index: 20;
+      }
+      #${PANEL_ID}.hidden {
+        display: none;
+      }
+      .rzp-resp-radar-head {
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(52, 211, 100, 0.2);
+        font-size: 13px;
+        font-weight: 700;
+        color: #86efac;
+      }
+      .rzp-resp-radar-body {
+        padding: 10px 12px;
+      }
+      .rzp-radar-section-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: #86efac;
+        margin-bottom: 5px;
+      }
+      .rzp-radar-section-title + .rzp-radar-section-title {
+        margin-top: 10px;
+      }
+      .rzp-radar-pos-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 5px;
+      }
+      .rzp-radar-pos-btn {
+        height: 38px;
+        background: rgba(34, 197, 94, 0.07);
+        border: 1px solid rgba(52, 211, 100, 0.18);
+        color: #a7f3d0;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 17px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .rzp-radar-pos-btn:hover {
+        background: rgba(34, 197, 94, 0.18);
+        border-color: rgba(52, 211, 100, 0.4);
+      }
+      .rzp-radar-pos-btn.active {
+        background: rgba(52, 211, 100, 0.25);
+        border-color: rgba(52, 211, 100, 0.7);
+        color: #4ade80;
+      }
+      .rzp-radar-refresh-row {
+        display: flex;
+        gap: 5px;
+      }
+      .rzp-radar-refresh-btn {
+        flex: 1;
+        height: 28px;
+        background: rgba(34, 197, 94, 0.07);
+        border: 1px solid rgba(52, 211, 100, 0.18);
+        color: #a7f3d0;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .rzp-radar-refresh-btn:hover {
+        background: rgba(34, 197, 94, 0.18);
+        border-color: rgba(52, 211, 100, 0.4);
+      }
+      .rzp-radar-refresh-btn.active {
+        background: rgba(52, 211, 100, 0.25);
+        border-color: rgba(52, 211, 100, 0.7);
+        color: #4ade80;
+      }
+      .rzp-resp-radar-note {
+        margin-top: 6px;
+        color: #8cb49a;
+        font-size: 10px;
+      }
+      @keyframes rzpWarningPulse {
+        0%, 100% {
+          box-shadow: 0 0 30px rgba(255, 0, 0, 0.8), 0 0 60px rgba(255, 69, 0, 0.4);
+        }
+        50% {
+          box-shadow: 0 0 50px rgba(255, 0, 0, 1), 0 0 100px rgba(255, 69, 0, 0.6);
+        }
+      }
+      @keyframes rzpWarningFadeIn {
+        from {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(0.5);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1);
+        }
+      }
+      @keyframes rzpWarningShake {
+        0%, 100% { transform: rotate(0deg); }
+        25% { transform: rotate(-15deg); }
+        75% { transform: rotate(15deg); }
+      }
+      @keyframes rzpWarningFadeOut {
+        from {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1);
+        }
+        to {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(0.8);
+        }
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function getWorld() {
+    try {
+      if (window.Engine?.worldConfig?.name) return window.Engine.worldConfig.name.toLowerCase();
+      if (window.Engine?.worldName) return window.Engine.worldName.toLowerCase();
+      const match = window.location.hostname.match(/^(\w+)\.margonem\.(pl|com)$/);
+      return match ? match[1].toLowerCase() : 'arkantes';
+    } catch (error) {
+      return 'arkantes';
+    }
+  }
+
+  function fetchLootlogTimers() {
+    const next = {};
+
+    try {
+      const cacheStr = window.localStorage.getItem('ll:query-cache');
+      if (!cacheStr) {
+        state.lootlogTimers = {};
+        return;
+      }
+
+      const cache = JSON.parse(cacheStr);
+      const world = getWorld();
+      const query = cache?.clientState?.queries?.find(
+        (q) => q?.queryKey && q.queryKey[0] === 'guild-timers' && q.queryKey[1] === world
+      );
+
+      const timers = query?.state?.data;
+      if (!Array.isArray(timers)) {
+        state.lootlogTimers = {};
+        return;
+      }
+
+      const now = Date.now();
+
+      timers.forEach((timer) => {
+        const type = timer?.npc?.type;
+        const name = timer?.npc?.name;
+        if (!name || (type !== 'ELITE2' && type !== 'TITAN')) return;
+
+        const minTime = new Date(timer.minSpawnTime).getTime();
+        const maxTime = new Date(timer.maxSpawnTime).getTime();
+
+        next[name] = {
+          name,
+          type,
+          minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
+          remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000))
+        };
+      });
+    } catch (error) {}
+
+    state.lootlogTimers = next;
+  }
+
+  function getCurrentMapName() {
+    return window.Engine?.map?.d?.name || window.Engine?.map?.name || window.map?.name || null;
+  }
+
+  function getCanvasBounds() {
+    const canvas = document.getElementById('GAME_CANVAS');
+    if (!canvas) {
+      return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    return {
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+
+  function getPositionStyle(index) {
+    const spacing = 34;
+    const offset = 10;
+    const bounds = getCanvasBounds();
+
+    const map = {
+      'top-left': {
+        top: bounds.top + offset + index * spacing,
+        left: bounds.left + offset,
+        transform: 'none'
+      },
+      'top-center': {
+        top: bounds.top + offset + index * spacing,
+        left: bounds.left + bounds.width / 2,
+        transform: 'translateX(-50%)'
+      },
+      'top-right': {
+        top: bounds.top + offset + index * spacing,
+        left: bounds.left + bounds.width - offset,
+        transform: 'translateX(-100%)'
+      },
+      'middle-left': {
+        top: bounds.top + bounds.height / 2 + index * spacing,
+        left: bounds.left + offset,
+        transform: 'translateY(-50%)'
+      },
+      'middle-center': {
+        top: bounds.top + bounds.height / 2 + index * spacing,
+        left: bounds.left + bounds.width / 2,
+        transform: 'translate(-50%, -50%)'
+      },
+      'middle-right': {
+        top: bounds.top + bounds.height / 2 + index * spacing,
+        left: bounds.left + bounds.width - offset,
+        transform: 'translate(-100%, -50%)'
+      },
+      'bottom-left': {
+        top: bounds.top + bounds.height - offset - index * spacing - 30,
+        left: bounds.left + offset,
+        transform: 'none'
+      },
+      'bottom-center': {
+        top: bounds.top + bounds.height - offset - index * spacing - 30,
+        left: bounds.left + bounds.width / 2,
+        transform: 'translateX(-50%)'
+      },
+      'bottom-right': {
+        top: bounds.top + bounds.height - offset - index * spacing - 30,
+        left: bounds.left + bounds.width - offset,
+        transform: 'translateX(-100%)'
+      }
+    };
+
+    return map[state.settings.position] || map['bottom-center'];
+  }
+
+  function formatTime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  function removeToasts() {
+    document.querySelectorAll(`.${TOAST_CLASS}`).forEach((node) => node.remove());
+  }
+
+  function showToast(npcName, timer, index, npcType) {
+    const node = document.createElement('div');
+    node.className = TOAST_CLASS;
+
+    const pos = getPositionStyle(index);
+    node.style.top = `${Math.round(pos.top)}px`;
+    node.style.left = `${Math.round(pos.left)}px`;
+    node.style.transform = pos.transform;
+
+    const nameColor = npcType === 'TITAN' ? '#f87171' : '#fb7185';
+
+    if (timer && typeof timer.remainingSeconds === 'number') {
+      node.innerHTML = `
+        <span style="color:${nameColor};font-weight:700;">${npcName}</span>
+        <span style="opacity:.65;"> - </span>
+        <span>respi za</span>
+        <span style="color:#86efac;font-weight:700;">${formatTime(timer.remainingSeconds)}</span>
+      `;
+    } else {
+      node.innerHTML = `
+        <span style="color:${nameColor};font-weight:700;">${npcName}</span>
+        <span style="opacity:.65;"> - </span>
+        <span style="color:#9ca3af;">brak na timerze</span>
+      `;
+    }
+
+    node.addEventListener('click', () => node.remove());
+    document.body.appendChild(node);
+  }
+
+  function showMatherWarning() {
+    if (state.matherWarningShown) return;
+    if (!window.RZP_PANEL_NOTIFICATIONS?.isEnabled('resp-radar.mather-warning')) return;
+
+    state.matherWarningShown = true;
+
+    const bounds = getCanvasBounds();
+    const warning = document.createElement('div');
+    warning.id = 'rzp-mather-warning';
+    warning.style.cssText = `
+      position: fixed;
+      top: ${Math.round(bounds.top + bounds.height / 2)}px;
+      left: ${Math.round(bounds.left + bounds.width / 2)}px;
+      transform: translate(-50%, -50%);
+      background: linear-gradient(135deg, rgba(139, 0, 0, 0.95), rgba(255, 69, 0, 0.95));
+      color: #fff;
+      padding: 20px 30px;
+      border-radius: 12px;
+      font-family: Arial, sans-serif;
+      font-size: 24px;
+      font-weight: bold;
+      box-shadow: 0 0 30px rgba(255, 0, 0, 0.8), 0 0 60px rgba(255, 69, 0, 0.4);
+      z-index: 100001;
+      animation: rzpWarningPulse 1s ease-in-out infinite, rzpWarningFadeIn 0.5s ease-out;
+      border: 3px solid rgba(255, 215, 0, 0.8);
+      text-shadow: 0 0 10px rgba(255, 0, 0, 0.8), 2px 2px 4px rgba(0, 0, 0, 0.9);
+      backdrop-filter: blur(5px);
+      pointer-events: auto;
+      cursor: pointer;
+    `;
+
+    warning.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 15px; justify-content: center;">
+        <span style="font-size: 32px; animation: rzpWarningShake 0.5s ease-in-out infinite;">⚠️</span>
+        <span style="letter-spacing: 2px;">UWAGA MATHER GRASUJE!</span>
+        <span style="font-size: 32px; animation: rzpWarningShake 0.5s ease-in-out infinite;">⚠️</span>
+      </div>
+    `;
+
+    document.body.appendChild(warning);
+
+    warning.addEventListener('click', () => {
+      warning.style.animation = 'rzpWarningFadeOut 0.3s ease-out';
+      setTimeout(() => warning.remove(), 300);
+    });
+
+    setTimeout(() => {
+      if (warning.parentNode) {
+        warning.style.animation = 'rzpWarningFadeOut 0.5s ease-out';
+        setTimeout(() => warning.remove(), 500);
+      }
+    }, 3000);
+  }
+
+  function refreshView() {
+    if (!state.enabled) return;
+
+    fetchLootlogTimers();
+    const mapName = getCurrentMapName();
+    
+    // Reset warning flag when map changes
+    if (mapName !== state.currentMapName) {
+      state.matherWarningShown = false;
+    }
+    state.currentMapName = mapName;
+
+    removeToasts();
+    if (!state.visible || !mapName) return;
+
+    const eliteData = ELITE_II_DATA[mapName];
+    const titanData = TITAN_DATA[mapName];
+    const npcData = eliteData || titanData;
+    const npcType = titanData ? 'TITAN' : 'ELITE2';
+
+    if (!npcData) return;
+
+    const npcNames = npcData.split('/').map((x) => x.trim());
+    let matherDetected = false;
+
+    npcNames.forEach((npcName, index) => {
+      let timer = state.lootlogTimers[npcName] || null;
+      if (!timer) {
+        for (const key of Object.keys(state.lootlogTimers)) {
+          if (key.includes(npcName) || npcName.includes(key)) {
+            timer = state.lootlogTimers[key];
+            break;
+          }
+        }
+      }
+
+      // Check for Mather in ELITE2 NPCs
+      if (npcType === 'ELITE2' && timer && timer.addedByName && timer.addedByName.toLowerCase().includes('ilmather')) {
+        matherDetected = true;
+      }
+
+      showToast(npcName, timer, index, npcType);
+    });
+
+    if (matherDetected) {
+      showMatherWarning();
+    }
+  }
+
+  function stopLoop() {
+    if (state.refreshIntervalId) {
+      clearInterval(state.refreshIntervalId);
+      state.refreshIntervalId = null;
+    }
+  }
+
+  function startLoop() {
+    stopLoop();
+    state.refreshIntervalId = setInterval(refreshView, state.settings.refreshMs);
+  }
+
+  function ensureSettingsPanel() {
+    ensureStyle();
+
+    let panel = document.getElementById(PANEL_ID);
+    if (panel) return panel;
+
+    panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.className = 'hidden';
+    const posIcons = [
+      { value: 'top-left', icon: '↖' }, { value: 'top-center', icon: '⬆' }, { value: 'top-right', icon: '↗' },
+      { value: 'middle-left', icon: '⬅' }, { value: 'middle-center', icon: '⏺' }, { value: 'middle-right', icon: '➡' },
+      { value: 'bottom-left', icon: '↙' }, { value: 'bottom-center', icon: '⬇' }, { value: 'bottom-right', icon: '↘' }
+    ];
+
+    panel.innerHTML = `
+      <div class="rzp-resp-radar-head">Timer z danej lokacji - ustawienia</div>
+      <div class="rzp-resp-radar-body">
+        <div class="rzp-radar-section-title">Pozycja komunikatu</div>
+        <div class="rzp-radar-pos-grid">
+          ${posIcons.map((p) => `<button class="rzp-radar-pos-btn${p.value === state.settings.position ? ' active' : ''}" data-pos="${p.value}">${p.icon}</button>`).join('')}
+        </div>
+        <div class="rzp-radar-section-title" style="margin-top:10px;">Odświeżanie timera</div>
+        <div class="rzp-radar-refresh-row">
+          ${REFRESH_OPTIONS.map((ms) => `<button class="rzp-radar-refresh-btn${ms === state.settings.refreshMs ? ' active' : ''}" data-refresh="${ms}">${ms / 1000}s</button>`).join('')}
+        </div>
+    `;
+
+    document.body.appendChild(panel);
+
+    if (typeof window.RZP_MAKE_DRAGGABLE === 'function') {
+      window.RZP_MAKE_DRAGGABLE(panel, panel.querySelector('.rzp-resp-radar-head'));
+    }
+
+    panel.querySelectorAll('.rzp-radar-pos-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        panel.querySelectorAll('.rzp-radar-pos-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.settings.position = btn.getAttribute('data-pos');
+        saveSettings();
+        refreshView();
+      });
+    });
+
+    panel.querySelectorAll('.rzp-radar-refresh-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        panel.querySelectorAll('.rzp-radar-refresh-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const next = Number(btn.getAttribute('data-refresh'));
+        if (!REFRESH_OPTIONS.includes(next)) return;
+        state.settings.refreshMs = next;
+        saveSettings();
+        startLoop();
+        refreshView();
+      });
+    });
+
+    const dockRow = window.RZP_DOCK_HIDDEN_UTILS?.makeRow?.(ADDON_ID);
+    if (dockRow) {
+      dockRow.style.marginTop = '10px';
+      const body = panel.querySelector('.rzp-resp-radar-body');
+      if (body) body.appendChild(dockRow);
+    }
+
+    return panel;
+  }
+
+  function hideSettingsPanel() {
+    const panel = document.getElementById(PANEL_ID);
+    if (panel) panel.classList.add('hidden');
+  }
+
+  function toggleSettingsPanel() {
+    const panel = ensureSettingsPanel();
+    panel.classList.toggle('hidden');
+    return !panel.classList.contains('hidden');
+  }
+
+  function enableResizeRefresh() {
+    if (state.resizeHandlerBound) return;
+    window.addEventListener('resize', refreshView);
+    state.resizeHandlerBound = true;
+  }
+
+  const addonApi = {
+    id: ADDON_ID,
+    name: 'Timer z danej lokacji',
+
+    async enable() {
+      state.enabled = true;
+      state.settings = loadSettings();
+      ensureStyle();
+      enableResizeRefresh();
+      startLoop();
+      refreshView();
+      return true;
+    },
+
+    disable() {
+      state.enabled = false;
+      stopLoop();
+      hideSettingsPanel();
+      removeToasts();
+      return true;
+    },
+
+    async runWidget() {
+      await this.enable();
+      state.visible = !state.visible;
+      refreshView();
+      return true;
+    },
+
+    async openSettings() {
+      await this.enable();
+      toggleSettingsPanel();
+      return true;
+    }
+  };
+
+  window.RZP_ADDONS_REGISTRY = window.RZP_ADDONS_REGISTRY || {};
+  window.RZP_ADDONS_REGISTRY[ADDON_ID] = addonApi;
+})();
