@@ -28,19 +28,32 @@
         return;
       }
 
-      const script = document.createElement('script');
-      script.src = `${CORE_SCRIPT_URL}?v=${Date.now()}`;
-      script.async = true;
-      script.dataset.rzpUlepszarkaNiCore = '1';
-      script.onload = () => {
-        window.__RZP_ULEPSZARKA_NI_CORE_LOADED = true;
-        resolve(true);
-      };
-      script.onerror = () => {
-        reject(new Error('Nie udalo sie zaladowac Ulepszarki NI.'));
-      };
+      const versionedUrl = `${CORE_SCRIPT_URL}?v=${Date.now()}`;
 
-      document.body.appendChild(script);
+      if (typeof window.__RZP_LOAD_MODULE === 'function') {
+        const marker = document.createElement('script');
+        marker.type = 'text/rzp-marker';
+        marker.dataset.rzpUlepszarkaNiCore = '1';
+        document.body.appendChild(marker);
+        window.__RZP_LOAD_MODULE(
+          versionedUrl,
+          () => { window.__RZP_ULEPSZARKA_NI_CORE_LOADED = true; resolve(true); },
+          () => reject(new Error('Nie udalo sie zaladowac Ulepszarki NI.'))
+        );
+      } else {
+        const script = document.createElement('script');
+        script.src = versionedUrl;
+        script.async = true;
+        script.dataset.rzpUlepszarkaNiCore = '1';
+        script.onload = () => {
+          window.__RZP_ULEPSZARKA_NI_CORE_LOADED = true;
+          resolve(true);
+        };
+        script.onerror = () => {
+          reject(new Error('Nie udalo sie zaladowac Ulepszarki NI.'));
+        };
+        document.body.appendChild(script);
+      }
     }).finally(() => {
       loadPromise = null;
     });

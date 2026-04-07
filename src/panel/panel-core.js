@@ -1540,7 +1540,11 @@
 
     for (const item of ADDON_ITEMS) {
       const enabled = isAddonEnabled(item.id);
-      await applyAddonState(item.id, enabled);
+      try {
+        await applyAddonState(item.id, enabled);
+      } catch (e) {
+        console.warn('[RZP] syncEnabledAddons: failed for', item.id, e);
+      }
     }
 
     await renderAddonDock();
