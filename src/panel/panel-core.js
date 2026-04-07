@@ -1499,15 +1499,26 @@
       const existing = document.querySelector(`script[data-rzp-addon-module="${url}"]`);
       if (existing) continue;
 
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = `${url}?v=${Date.now()}`;
-        script.async = true;
-        script.dataset.rzpAddonModule = url;
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error(`Nie udalo sie zaladowac modulu: ${url}`));
-        document.body.appendChild(script);
-      }).catch(() => {});
+      await new Promise((resolve) => {
+        const versionedUrl = `${url}?v=${Date.now()}`;
+
+        if (typeof window.__RZP_LOAD_MODULE === 'function') {
+          // Marker zapobiega ponownemu załadowaniu podczas ładowania
+          const marker = document.createElement('script');
+          marker.type = 'text/rzp-marker';
+          marker.dataset.rzpAddonModule = url;
+          document.body.appendChild(marker);
+          window.__RZP_LOAD_MODULE(versionedUrl, resolve, resolve);
+        } else {
+          const script = document.createElement('script');
+          script.src = versionedUrl;
+          script.async = true;
+          script.dataset.rzpAddonModule = url;
+          script.onload = () => resolve();
+          script.onerror = () => resolve();
+          document.body.appendChild(script);
+        }
+      });
     }
   }
 

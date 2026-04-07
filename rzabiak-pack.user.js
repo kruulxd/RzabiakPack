@@ -6,7 +6,7 @@
 // @author       kruulxd
 // @match        *://*.margonem.pl/*
 // @match        *://margonem.pl/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
 // @connect      raw.githubusercontent.com
 // @downloadURL  https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/rzabiak-pack.user.js
 // @updateURL    https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/rzabiak-pack.user.js
@@ -22,21 +22,40 @@
   }
   window.__RZP_PANEL_LOADER_DONE = true;
 
-  const existing = document.querySelector('script[data-rzp-panel-core="1"]');
-  if (existing) {
-    return;
-  }
-
-  const script = document.createElement('script');
-  script.src = `${CORE_URL}?v=${Date.now()}`;
-  script.async = true;
-  script.dataset.rzpPanelCore = '1';
-  script.onload = () => {
-    console.log('RzabiakPack core loaded');
+  // Udostępnij loader omijający CSP dla panel-core.js
+  unsafeWindow.__RZP_LOAD_MODULE = function (url, onload, onerror) {
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: url,
+      onload: function (response) {
+        try {
+          const script = document.createElement('script');
+          script.textContent = response.responseText;
+          document.documentElement.appendChild(script);
+          script.remove();
+          if (onload) onload();
+        } catch (e) {
+          if (onerror) onerror(e);
+        }
+      },
+      onerror: function () {
+        if (onerror) onerror(new Error('Failed: ' + url));
+      }
+    });
   };
-  script.onerror = () => {
-    console.error('RzabiakPack core failed to load');
-  };
 
-  document.body.appendChild(script);
+  GM_xmlhttpRequest({
+    method: 'GET',
+    url: `${CORE_URL}?v=${Date.now()}`,
+    onload: function (response) {
+      const script = document.createElement('script');
+      script.textContent = response.responseText;
+      document.documentElement.appendChild(script);
+      script.remove();
+      console.log('RzabiakPack core loaded');
+    },
+    onerror: function () {
+      console.error('RzabiakPack core failed to load');
+    }
+  });
 })();
