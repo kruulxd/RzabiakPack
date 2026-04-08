@@ -5,7 +5,6 @@
 // @description  Loader panelu RzabiakPack
 // @author       kruulxd
 // @match        *://*.margonem.pl/*
-// @match        *://margonem.pl/*
 // @grant        GM_xmlhttpRequest
 // @connect      raw.githubusercontent.com
 // @downloadURL  https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/rzabiak-pack.user.js
