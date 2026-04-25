@@ -8,10 +8,9 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-direct-api-poll-v2';
+  const ADDON_BUILD = '2026-04-25-api-trigger-poll-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
-  const LOOTLOG_TIMERS_API_BASE = 'https://api.lootlog.pl/timers';
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
   const RUNTIME_SCAN_MAX_DEPTH = 8;
@@ -1111,28 +1110,31 @@
     state.lastNetworkPollAt = now;
     state.lastNetworkPollStatus = 'pending';
 
-    const url = `${LOOTLOG_TIMERS_API_BASE}?world=${encodeURIComponent(world)}`;
-
     try {
-      window.fetch(url, {
-        method: 'GET',
-        credentials: 'omit',
-        cache: 'no-store'
-      }).then((response) => {
-        if (!response || !response.ok) {
-          state.lastNetworkPollStatus = `http-${response?.status || 'error'}`;
-          return null;
-        }
-        return response.text();
-      }).then((text) => {
-        if (!text) return;
-        inspectNetworkPayload(text, { source: 'direct-fetch', url });
-        state.lastNetworkPollStatus = 'ok';
-      }).catch(() => {
-        state.lastNetworkPollStatus = 'fetch-error';
-      });
+      const api = window.lootlogGameClientApi;
+      if (!api || typeof api.getTimers !== 'function') {
+        state.lastNetworkPollStatus = 'api-missing';
+        return;
+      }
+
+      const result = api.getTimers();
+      if (result && typeof result.then === 'function') {
+        result.then((resolved) => {
+          maybeCaptureApiTimers(resolved, { source: 'api-trigger-promise', method: 'getTimers' });
+          state.lastNetworkPollStatus = 'api-promise-ok';
+        }).catch(() => {
+          state.lastNetworkPollStatus = 'api-promise-error';
+        });
+      } else if (result !== undefined) {
+        maybeCaptureApiTimers(result, { source: 'api-trigger-sync', method: 'getTimers' });
+        state.lastNetworkPollStatus = 'api-sync-ok';
+      } else {
+        // Undefined is expected in some Lootlog versions; this call can still trigger
+        // internal fetch/socket updates that our network hooks capture.
+        state.lastNetworkPollStatus = 'api-triggered';
+      }
     } catch (error) {
-      state.lastNetworkPollStatus = 'sync-error';
+      state.lastNetworkPollStatus = 'api-trigger-error';
     }
   }
 
