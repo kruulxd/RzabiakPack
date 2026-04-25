@@ -19,6 +19,7 @@
   const UI_REFRESH_INTERVAL_MS = 1000;
   const BATTLE_TRIGGER_COOLDOWN_MS = 5000;
   const BATTLE_STATE_POLL_INTERVAL_MS = 250;
+  const BATTLE_HOOK_REBIND_INTERVAL_MS = 1500;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -194,6 +195,7 @@
     battleLogObserverBound: false,
     battleLogObserver: null,
     battleStateIntervalId: null,
+    battleHookWatcherId: null,
     battleWasActive: false,
     lastBattleLogTriggerAt: 0,
     battleRefreshTimeoutIds: [],
@@ -1378,6 +1380,52 @@
     state.battleStateIntervalId = null;
   }
 
+  function triggerPostBattleRefreshFromHook() {
+    if (!state.enabled) return;
+
+    // Lootlog data can land with slight delay after endBattle event.
+    [400, 1400, 2800].forEach((delayMs) => {
+      const timeoutId = setTimeout(() => {
+        if (!state.enabled) return;
+        scheduleForcedTimerRefresh();
+      }, delayMs);
+      state.battleRefreshTimeoutIds.push(timeoutId);
+    });
+  }
+
+  function ensureBattleEndHook() {
+    const battle = window.Engine?.battle;
+    if (!battle || typeof battle.endBattle !== 'function') return false;
+    if (battle.__rzpRespRadarEndBattleWrapped) return true;
+
+    const originalEndBattle = battle.endBattle;
+    battle.endBattle = function (...args) {
+      const result = originalEndBattle.apply(this, args);
+      try {
+        triggerPostBattleRefreshFromHook();
+      } catch (error) {}
+      return result;
+    };
+
+    battle.__rzpRespRadarEndBattleWrapped = true;
+    return true;
+  }
+
+  function startBattleEndHookWatcher() {
+    if (state.battleHookWatcherId) return;
+
+    ensureBattleEndHook();
+    state.battleHookWatcherId = setInterval(() => {
+      ensureBattleEndHook();
+    }, BATTLE_HOOK_REBIND_INTERVAL_MS);
+  }
+
+  function stopBattleEndHookWatcher() {
+    if (!state.battleHookWatcherId) return;
+    clearInterval(state.battleHookWatcherId);
+    state.battleHookWatcherId = null;
+  }
+
   function enableBattleLogRefreshHook() {
     if (state.battleLogObserverBound) return;
     if (typeof MutationObserver !== 'function') return;
@@ -1445,6 +1493,7 @@
   function disableBattleLogRefreshHook() {
     clearBattleRefreshTimeouts();
     stopBattleStatePolling();
+    stopBattleEndHookWatcher();
     state.battleWasActive = false;
     if (!state.battleLogObserverBound) return;
     try {
@@ -2697,6 +2746,7 @@
       state.settings = loadSettings();
       state.battleWasActive = isBattleActiveForRadar();
       startBattleStatePolling();
+      startBattleEndHookWatcher();
       state.warmupUntil = Date.now() + STARTUP_WARMUP_MS;
       state.lastDataRefreshAt = 0;
       state.lastNetworkPollAt = 0;
