@@ -1305,4 +1305,5 @@
 
   window.RZP_ADDONS_REGISTRY = window.RZP_ADDONS_REGISTRY || {};
   window.RZP_ADDONS_REGISTRY[ADDON_ID] = addonApi;
+  window.__rzpRespRadarState = state;
 })();
