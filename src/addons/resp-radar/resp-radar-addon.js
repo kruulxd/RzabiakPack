@@ -2599,7 +2599,11 @@
 
     npcNames.forEach((npcName, index) => {
       const timerFromState = getTimerForNpcName(npcName, state.lootlogTimers);
-      const timer = timerFromState || getMinuteWindowTimerForNpc(npcName);
+      const timerFromMinuteWindow = getMinuteWindowTimerForNpc(npcName);
+      let timer = timerFromState || null;
+      if (timerFromMinuteWindow) {
+        timer = pickBetterTimer(timer, timerFromMinuteWindow);
+      }
 
       if (timer) matchedCount += 1;
 
