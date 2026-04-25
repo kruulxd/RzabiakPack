@@ -8,9 +8,11 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-persisted-network-cache-v1';
+  const ADDON_BUILD = '2026-04-25-performance-throttle-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
+  const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
+  const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -159,6 +161,7 @@
     },
     lastAllKeysFallbackAt: 0,
     lastRuntimeScanAt: 0,
+    lastDataRefreshAt: 0,
     lastNetworkPollAt: 0,
     lastNetworkPollStatus: 'idle',
     networkHookInstalled: false,
@@ -1285,9 +1288,13 @@
     };
 
     const parseFromEntries = (list) => {
-      for (const [, rawValue] of list) {
+      for (const [entryKey, rawValue] of list) {
         const parsed = safeJsonParse(rawValue);
         if (!parsed) continue;
+
+        const shouldDeepScanRoot =
+          /timers?|guild|lootlog|query-cache/i.test(String(entryKey || '')) &&
+          String(rawValue || '').length < 350000;
 
         const roots = [parsed];
         if (typeof parsed.state === 'string') {
@@ -1317,10 +1324,12 @@
             });
           });
 
-          diagnostics.normalizedTimers += extractTimersFromObjectGraph(root, now, parsedTimers, {
-            maxDepth: 5,
-            maxNodes: 4000
-          });
+          if (shouldDeepScanRoot) {
+            diagnostics.normalizedTimers += extractTimersFromObjectGraph(root, now, parsedTimers, {
+              maxDepth: 4,
+              maxNodes: 1800
+            });
+          }
         }
       }
     };
@@ -1721,6 +1730,15 @@
     let lastStorageTimers = null;
 
     try {
+      const now = Date.now();
+      const currentSource = state.diagnostics.source;
+      const hasLiveLikeSource = currentSource === 'network' || currentSource === 'persisted';
+      const minInterval = hasLiveLikeSource ? DATA_REFRESH_IDLE_INTERVAL_MS : DATA_REFRESH_MIN_INTERVAL_MS;
+      if (now - state.lastDataRefreshAt < minInterval) {
+        return;
+      }
+      state.lastDataRefreshAt = now;
+
       const world = getWorld();
       pollLootlogTimersApi(world);
 
