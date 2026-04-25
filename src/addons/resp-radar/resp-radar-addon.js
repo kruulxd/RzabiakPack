@@ -157,6 +157,14 @@
     lastAllKeysFallbackAt: 0,
     lastRuntimeScanAt: 0,
     networkHookInstalled: false,
+    apiTimersCache: {},
+    apiMeta: {
+      source: null,
+      method: null,
+      capturedAt: 0,
+      timerCount: 0,
+      hasActiveTimers: false
+    },
     networkTimersCache: {},
     networkMeta: {
       source: null,
@@ -786,6 +794,94 @@
     return null;
   }
 
+  function mergeTimers(target, source) {
+    if (!source || typeof source !== 'object') return;
+    Object.values(source).forEach((timer) => {
+      if (!timer?.name) return;
+      const existing = target[timer.name];
+      const picked = pickBetterTimer(existing, timer);
+      if (picked !== existing) {
+        target[timer.name] = picked;
+      }
+    });
+  }
+
+  function extractTimersFromObjectGraph(root, now, parsedTimers, limits) {
+    const maxDepth = limits?.maxDepth ?? 4;
+    const maxNodes = limits?.maxNodes ?? 2500;
+    const seen = new WeakSet();
+    let visited = 0;
+    let normalized = 0;
+
+    const visit = (node, depth) => {
+      if (!node || typeof node !== 'object') return;
+      if (seen.has(node)) return;
+      if (depth > maxDepth) return;
+      if (visited >= maxNodes) return;
+
+      seen.add(node);
+      visited += 1;
+
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          visit(node[i], depth + 1);
+          if (visited >= maxNodes) return;
+        }
+        return;
+      }
+
+      let entries = [];
+      try {
+        entries = Object.entries(node);
+      } catch (error) {
+        entries = [];
+      }
+
+      for (const [key, value] of entries) {
+        const direct = normalizeNamedTimerValue(key, value, now);
+        if (direct) {
+          const existing = parsedTimers[direct.name];
+          const picked = pickBetterTimer(existing, direct);
+          if (picked !== existing) {
+            parsedTimers[direct.name] = picked;
+            normalized += 1;
+          }
+        }
+
+        if (value && typeof value === 'object') {
+          visit(value, depth + 1);
+        }
+
+        if (visited >= maxNodes) return;
+      }
+    };
+
+    visit(root, 0);
+    return normalized;
+  }
+
+  function maybeCaptureApiTimers(payload, meta) {
+    if (!payload || (typeof payload !== 'object' && !Array.isArray(payload))) return;
+
+    const world = getWorld();
+    const now = Date.now();
+    const { timers, arraysFound, normalizedTimers } = buildTimersFromRoots([payload], world, now);
+    const directNormalized = extractTimersFromObjectGraph(payload, now, timers, { maxDepth: 5, maxNodes: 3000 });
+    const timerCount = Object.keys(timers).length;
+    if (!timerCount) return;
+
+    state.apiTimersCache = timers;
+    state.apiMeta = {
+      source: meta?.source || 'api',
+      method: meta?.method || null,
+      capturedAt: now,
+      timerCount,
+      hasActiveTimers: hasActiveTimers(timers),
+      arraysFound,
+      normalizedTimers: normalizedTimers + directNormalized
+    };
+  }
+
   function getTimerQualityScore(timer) {
     if (!timer) return -1;
     const remaining = Number(timer.remainingSeconds);
@@ -1048,6 +1144,7 @@
       arraysFound: 0,
       normalizedTimers: 0,
       usedMethods: [],
+      pendingPromiseMethods: [],
       candidateKeys: []
     };
 
@@ -1085,7 +1182,16 @@
       try {
         const result = fn.call(api);
         diagnostics.usedMethods.push(name);
-        addRoot(result, `api.${name}()`);
+        if (result && typeof result.then === 'function') {
+          diagnostics.pendingPromiseMethods.push(name);
+          result.then((resolved) => {
+            try {
+              maybeCaptureApiTimers(resolved, { source: 'api-promise', method: name });
+            } catch (error) {}
+          }).catch(() => {});
+        } else {
+          addRoot(result, `api.${name}()`);
+        }
       } catch (error) {}
     });
 
@@ -1121,25 +1227,9 @@
         });
       });
 
-      let entries = [];
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        try {
-          entries = Object.entries(value);
-        } catch (error) {
-          entries = [];
-        }
-      }
-
-      entries.forEach(([key, child]) => {
-        const direct = normalizeNamedTimerValue(key, child, now);
-        if (!direct) return;
-
-        const existing = parsedTimers[direct.name];
-        const picked = pickBetterTimer(existing, direct);
-        if (picked !== existing) {
-          parsedTimers[direct.name] = picked;
-          diagnostics.normalizedTimers += 1;
-        }
+      diagnostics.normalizedTimers += extractTimersFromObjectGraph(value, now, parsedTimers, {
+        maxDepth: 4,
+        maxNodes: 2500
       });
     });
 
@@ -1411,8 +1501,12 @@
 
       const apiResult = parseTimersFromLootlogApi(world);
       const fromApi = apiResult.timers || {};
-      const apiTimerCount = Object.keys(fromApi).length;
-      const hasActiveApiTimers = hasActiveTimers(fromApi);
+      const fromApiCache = state.apiTimersCache || {};
+      const mergedApiTimers = {};
+      mergeTimers(mergedApiTimers, fromApi);
+      mergeTimers(mergedApiTimers, fromApiCache);
+      const apiTimerCount = Object.keys(mergedApiTimers).length;
+      const hasActiveApiTimers = hasActiveTimers(mergedApiTimers);
 
       let runtimeResult;
       try {
@@ -1439,6 +1533,15 @@
 
       state.diagnostics.storage = storageResult.diagnostics;
       state.diagnostics.api = apiResult.diagnostics;
+      state.diagnostics.api.cache = {
+        source: state.apiMeta.source,
+        method: state.apiMeta.method,
+        capturedAt: state.apiMeta.capturedAt,
+        timerCount: state.apiMeta.timerCount,
+        hasActiveTimers: state.apiMeta.hasActiveTimers,
+        arraysFound: state.apiMeta.arraysFound || 0,
+        normalizedTimers: state.apiMeta.normalizedTimers || 0
+      };
       state.diagnostics.network = {
         source: state.networkMeta.source,
         url: state.networkMeta.url,
@@ -1476,11 +1579,11 @@
         (hasActiveApiTimers || (!hasActiveStorageTimers && !hasActiveRuntimeTimers));
 
       if (preferApi) {
-        state.lootlogTimers = fromApi;
+        state.lootlogTimers = mergedApiTimers;
         state.diagnostics.source = 'api';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
-        logTimerDiagnostics(apiResult.diagnostics, apiTimerCount, null, 0, 'api');
+        logTimerDiagnostics(state.diagnostics.api, apiTimerCount, null, 0, 'api');
         return;
       }
 
