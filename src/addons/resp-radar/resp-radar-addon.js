@@ -8,8 +8,10 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-storage-map-ws-v1';
+  const ADDON_BUILD = '2026-04-25-direct-api-poll-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
+  const NETWORK_API_POLL_COOLDOWN_MS = 8000;
+  const LOOTLOG_TIMERS_API_BASE = 'https://api.lootlog.pl/timers';
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
   const RUNTIME_SCAN_MAX_DEPTH = 8;
@@ -156,6 +158,7 @@
     },
     lastAllKeysFallbackAt: 0,
     lastRuntimeScanAt: 0,
+    lastNetworkPollAt: 0,
     networkHookInstalled: false,
     apiTimersCache: {},
     apiMeta: {
@@ -1098,6 +1101,30 @@
     } catch (error) {}
   }
 
+  function pollLootlogTimersApi(world) {
+    if (!world) return;
+
+    const now = Date.now();
+    if (now - state.lastNetworkPollAt < NETWORK_API_POLL_COOLDOWN_MS) return;
+    state.lastNetworkPollAt = now;
+
+    const url = `${LOOTLOG_TIMERS_API_BASE}?world=${encodeURIComponent(world)}`;
+
+    try {
+      window.fetch(url, {
+        method: 'GET',
+        credentials: 'omit',
+        cache: 'no-store'
+      }).then((response) => {
+        if (!response || !response.ok) return null;
+        return response.text();
+      }).then((text) => {
+        if (!text) return;
+        inspectNetworkPayload(text, { source: 'direct-fetch', url });
+      }).catch(() => {});
+    } catch (error) {}
+  }
+
   function parseTimersFromLootlogStorage(world) {
     const now = Date.now();
     const parsedTimers = {};
@@ -1553,6 +1580,8 @@
 
     try {
       const world = getWorld();
+      pollLootlogTimersApi(world);
+
       const storageResult = parseTimersFromLootlogStorage(world);
       const fromStorage = storageResult.timers || {};
       lastStorageTimers = fromStorage;
