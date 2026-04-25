@@ -167,7 +167,7 @@
 
   const state = {
     enabled: false,
-    visible: false,
+    visible: true,
     settings: { ...DEFAULT_SETTINGS },
     lootlogTimers: {},
     currentMapName: null,
@@ -2426,11 +2426,8 @@
     async runWidget() {
       if (!state.enabled) {
         await this.enable();
-        state.visible = true;
-      } else {
-        state.visible = !state.visible;
       }
-      refreshView();
+      toggleSettingsPanel();
       return true;
     },
 

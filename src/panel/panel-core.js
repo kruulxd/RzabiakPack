@@ -128,7 +128,8 @@
       description: 'Timer respu E2 i Tytana pokazany w oknie gry.',
       dockIcon: '⏱',
       dockTitle: 'Timer z danej lokacji',
-      requiredInterface: 'NI'
+      requiredInterface: 'NI',
+      hasSettings: true
     },
     {
       id: 'roller',
