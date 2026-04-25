@@ -8,9 +8,11 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-api-trigger-poll-v1';
+  const ADDON_BUILD = '2026-04-25-persisted-network-cache-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
+  const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
+  const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
   const RUNTIME_SCAN_MAX_DEPTH = 8;
@@ -183,13 +185,16 @@
       storage: null,
       api: null,
       network: null,
+      persisted: null,
       runtime: null,
       dom: null,
       hasActiveNetworkTimers: false,
+      hasActivePersistedTimers: false,
       hasActiveApiTimers: false,
       hasActiveStorageTimers: false,
       hasActiveRuntimeTimers: false,
       networkTimerCount: 0,
+      persistedTimerCount: 0,
       apiTimerCount: 0,
       storageTimerCount: 0,
       runtimeTimerCount: 0,
@@ -974,6 +979,130 @@
       normalizedTimers: normalizedTimers + directNormalized,
       messageCount: state.networkMeta.messageCount || 0
     };
+
+    savePersistedNetworkTimers(timers, now);
+  }
+
+  function savePersistedNetworkTimers(timers, savedAt) {
+    try {
+      const world = getWorld();
+      const serialized = {};
+      Object.values(timers || {}).forEach((timer) => {
+        if (!timer?.name) return;
+
+        const maxTs = Number(timer?._debug?.parsedMaxTime);
+        const minTs = Number(timer?._debug?.parsedMinTime);
+        const resolvedMaxTs = Number.isFinite(maxTs)
+          ? maxTs
+          : (savedAt + Math.max(0, Number(timer.remainingSeconds) || 0) * 1000);
+        const resolvedMinTs = Number.isFinite(minTs)
+          ? minTs
+          : (savedAt + Math.max(0, Number(timer.minRemainingSeconds) || 0) * 1000);
+
+        serialized[timer.name] = {
+          name: timer.name,
+          type: timer.type,
+          addedByName: timer.addedByName || null,
+          minTs: resolvedMinTs,
+          maxTs: resolvedMaxTs
+        };
+      });
+
+      const payload = {
+        world,
+        savedAt,
+        timers: serialized
+      };
+
+      window.localStorage.setItem(PERSISTED_TIMERS_CACHE_KEY, JSON.stringify(payload));
+    } catch (error) {}
+  }
+
+  function loadPersistedNetworkTimers(world) {
+    const diagnostics = {
+      found: false,
+      valid: false,
+      reason: null,
+      world: world || null,
+      savedAt: 0,
+      timerCount: 0,
+      hasActiveTimers: false
+    };
+
+    try {
+      const raw = window.localStorage.getItem(PERSISTED_TIMERS_CACHE_KEY);
+      if (!raw) {
+        diagnostics.reason = 'missing';
+        return { timers: {}, diagnostics };
+      }
+
+      diagnostics.found = true;
+      const parsed = safeJsonParse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        diagnostics.reason = 'invalid-json';
+        return { timers: {}, diagnostics };
+      }
+
+      const savedWorld = String(parsed.world || '').toLowerCase();
+      if (savedWorld && world && savedWorld !== String(world).toLowerCase()) {
+        diagnostics.reason = 'world-mismatch';
+        return { timers: {}, diagnostics };
+      }
+
+      const savedAt = Number(parsed.savedAt || 0);
+      diagnostics.savedAt = savedAt;
+      if (!Number.isFinite(savedAt) || savedAt <= 0) {
+        diagnostics.reason = 'invalid-savedAt';
+        return { timers: {}, diagnostics };
+      }
+
+      if (Date.now() - savedAt > PERSISTED_TIMERS_CACHE_MAX_AGE_MS) {
+        diagnostics.reason = 'expired-cache';
+        return { timers: {}, diagnostics };
+      }
+
+      const sourceTimers = parsed.timers;
+      if (!sourceTimers || typeof sourceTimers !== 'object') {
+        diagnostics.reason = 'missing-timers';
+        return { timers: {}, diagnostics };
+      }
+
+      const now = Date.now();
+      const restored = {};
+      Object.values(sourceTimers).forEach((item) => {
+        if (!item?.name || !item?.type) return;
+        const maxTs = Number(item.maxTs);
+        const minTs = Number(item.minTs);
+        if (!Number.isFinite(maxTs)) return;
+
+        const minRemaining = Number.isFinite(minTs)
+          ? Math.max(0, Math.floor((minTs - now) / 1000))
+          : Math.max(0, Math.floor((maxTs - now) / 1000));
+        const remaining = Math.max(0, Math.floor((maxTs - now) / 1000));
+
+        restored[item.name] = {
+          name: item.name,
+          type: item.type,
+          minRemainingSeconds: minRemaining,
+          remainingSeconds: remaining,
+          addedByName: item.addedByName || null,
+          _debug: {
+            source: 'persisted-network-cache',
+            parsedMinTime: Number.isFinite(minTs) ? minTs : maxTs,
+            parsedMaxTime: maxTs
+          }
+        };
+      });
+
+      diagnostics.valid = true;
+      diagnostics.reason = 'ok';
+      diagnostics.timerCount = Object.keys(restored).length;
+      diagnostics.hasActiveTimers = hasActiveTimers(restored);
+      return { timers: restored, diagnostics };
+    } catch (error) {
+      diagnostics.reason = 'exception';
+      return { timers: {}, diagnostics };
+    }
   }
 
   function inspectNetworkText(text, meta) {
@@ -1605,6 +1734,11 @@
       const networkTimerCount = Object.keys(fromNetwork).length;
       const hasActiveNetworkTimers = hasActiveTimers(fromNetwork);
 
+      const persistedResult = loadPersistedNetworkTimers(world);
+      const fromPersisted = persistedResult.timers || {};
+      const persistedTimerCount = Object.keys(fromPersisted).length;
+      const hasActivePersistedTimers = hasActiveTimers(fromPersisted);
+
       const apiResult = parseTimersFromLootlogApi(world);
       const fromApi = apiResult.timers || {};
       const fromApiCache = state.apiTimersCache || {};
@@ -1660,12 +1794,15 @@
         lastPollAt: state.lastNetworkPollAt || 0,
         lastPollStatus: state.lastNetworkPollStatus || 'idle'
       };
+      state.diagnostics.persisted = persistedResult.diagnostics;
       state.diagnostics.runtime = runtimeResult.diagnostics;
       state.diagnostics.hasActiveNetworkTimers = hasActiveNetworkTimers;
+      state.diagnostics.hasActivePersistedTimers = hasActivePersistedTimers;
       state.diagnostics.hasActiveApiTimers = hasActiveApiTimers;
       state.diagnostics.hasActiveStorageTimers = hasActiveStorageTimers;
       state.diagnostics.hasActiveRuntimeTimers = hasActiveRuntimeTimers;
       state.diagnostics.networkTimerCount = networkTimerCount;
+      state.diagnostics.persistedTimerCount = persistedTimerCount;
       state.diagnostics.apiTimerCount = apiTimerCount;
       state.diagnostics.storageTimerCount = storageTimerCount;
       state.diagnostics.runtimeTimerCount = runtimeTimerCount;
@@ -1680,6 +1817,21 @@
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
         logTimerDiagnostics(state.diagnostics.network, networkTimerCount, null, 0, 'network');
+        return;
+      }
+
+      const preferPersisted =
+        persistedTimerCount > 0 &&
+        hasActivePersistedTimers &&
+        !hasActiveNetworkTimers &&
+        !hasActiveApiTimers;
+
+      if (preferPersisted) {
+        state.lootlogTimers = fromPersisted;
+        state.diagnostics.source = 'persisted';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
+        logTimerDiagnostics(state.diagnostics.persisted, persistedTimerCount, null, 0, 'persisted');
         return;
       }
 
