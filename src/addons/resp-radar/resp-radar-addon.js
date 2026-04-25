@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-direct-api-poll-v1';
+  const ADDON_BUILD = '2026-04-25-direct-api-poll-v2';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
   const LOOTLOG_TIMERS_API_BASE = 'https://api.lootlog.pl/timers';
@@ -159,6 +159,7 @@
     lastAllKeysFallbackAt: 0,
     lastRuntimeScanAt: 0,
     lastNetworkPollAt: 0,
+    lastNetworkPollStatus: 'idle',
     networkHookInstalled: false,
     apiTimersCache: {},
     apiMeta: {
@@ -959,6 +960,7 @@
     const world = getWorld();
     const now = Date.now();
     const { timers, arraysFound, normalizedTimers } = buildTimersFromRoots([payload], world, now);
+    const directNormalized = extractTimersFromObjectGraph(payload, now, timers, { maxDepth: 6, maxNodes: 4500 });
     const timerCount = Object.keys(timers).length;
     if (!timerCount) return;
 
@@ -970,7 +972,7 @@
       timerCount,
       hasActiveTimers: hasActiveTimers(timers),
       arraysFound,
-      normalizedTimers,
+      normalizedTimers: normalizedTimers + directNormalized,
       messageCount: state.networkMeta.messageCount || 0
     };
   }
@@ -1107,6 +1109,7 @@
     const now = Date.now();
     if (now - state.lastNetworkPollAt < NETWORK_API_POLL_COOLDOWN_MS) return;
     state.lastNetworkPollAt = now;
+    state.lastNetworkPollStatus = 'pending';
 
     const url = `${LOOTLOG_TIMERS_API_BASE}?world=${encodeURIComponent(world)}`;
 
@@ -1116,13 +1119,21 @@
         credentials: 'omit',
         cache: 'no-store'
       }).then((response) => {
-        if (!response || !response.ok) return null;
+        if (!response || !response.ok) {
+          state.lastNetworkPollStatus = `http-${response?.status || 'error'}`;
+          return null;
+        }
         return response.text();
       }).then((text) => {
         if (!text) return;
         inspectNetworkPayload(text, { source: 'direct-fetch', url });
-      }).catch(() => {});
-    } catch (error) {}
+        state.lastNetworkPollStatus = 'ok';
+      }).catch(() => {
+        state.lastNetworkPollStatus = 'fetch-error';
+      });
+    } catch (error) {
+      state.lastNetworkPollStatus = 'sync-error';
+    }
   }
 
   function parseTimersFromLootlogStorage(world) {
@@ -1643,7 +1654,9 @@
         hasActiveTimers: state.networkMeta.hasActiveTimers,
         arraysFound: state.networkMeta.arraysFound || 0,
         normalizedTimers: state.networkMeta.normalizedTimers || 0,
-        messageCount: state.networkMeta.messageCount || 0
+        messageCount: state.networkMeta.messageCount || 0,
+        lastPollAt: state.lastNetworkPollAt || 0,
+        lastPollStatus: state.lastNetworkPollStatus || 'idle'
       };
       state.diagnostics.runtime = runtimeResult.diagnostics;
       state.diagnostics.hasActiveNetworkTimers = hasActiveNetworkTimers;
