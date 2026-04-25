@@ -130,9 +130,47 @@
     matherWarningShown: false,
     debug: {
       lastSummaryAt: 0,
-      lastSummaryHash: ''
+      lastSummaryHash: '',
+      lastRefreshLogAt: 0,
+      lastRefreshLogHash: ''
     }
   };
+
+  function normalizeMapName(name) {
+    if (!name) return '';
+    return String(name)
+      .normalize('NFKC')
+      .replace(/[\u2012\u2013\u2014\u2015]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function getNpcDataForMap(mapName) {
+    if (!mapName) return null;
+
+    const directElite = ELITE_II_DATA[mapName];
+    if (directElite) return { npcData: directElite, npcType: 'ELITE2', lookupMode: 'direct' };
+
+    const directTitan = TITAN_DATA[mapName];
+    if (directTitan) return { npcData: directTitan, npcType: 'TITAN', lookupMode: 'direct' };
+
+    const normalizedMapName = normalizeMapName(mapName);
+    if (!normalizedMapName) return null;
+
+    for (const key of Object.keys(ELITE_II_DATA)) {
+      if (normalizeMapName(key) === normalizedMapName) {
+        return { npcData: ELITE_II_DATA[key], npcType: 'ELITE2', lookupMode: 'normalized', matchedKey: key };
+      }
+    }
+
+    for (const key of Object.keys(TITAN_DATA)) {
+      if (normalizeMapName(key) === normalizedMapName) {
+        return { npcData: TITAN_DATA[key], npcType: 'TITAN', lookupMode: 'normalized', matchedKey: key };
+      }
+    }
+
+    return null;
+  }
 
   function isDebugEnabled() {
     try {
@@ -196,7 +234,7 @@
         font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
         font-size: 12px;
         box-shadow: 0 6px 16px rgba(0, 0, 0, 0.42);
-        z-index: 18;
+        z-index: 100000;
         pointer-events: auto;
         cursor: pointer;
       }
@@ -912,17 +950,38 @@
     state.currentMapName = mapName;
 
     removeToasts();
-    if (!state.visible || !mapName) return;
+    if (!state.visible || !mapName) {
+      const refreshHash = `skip:${state.visible}:${mapName || ''}`;
+      const now = Date.now();
+      if (isDebugEnabled() && (state.debug.lastRefreshLogHash !== refreshHash || now - state.debug.lastRefreshLogAt > 10000)) {
+        state.debug.lastRefreshLogHash = refreshHash;
+        state.debug.lastRefreshLogAt = now;
+        debugWarn('refreshView skipped:', { visible: state.visible, mapName });
+      }
+      return;
+    }
 
-    const eliteData = ELITE_II_DATA[mapName];
-    const titanData = TITAN_DATA[mapName];
-    const npcData = eliteData || titanData;
-    const npcType = titanData ? 'TITAN' : 'ELITE2';
+    const mapData = getNpcDataForMap(mapName);
+    const npcData = mapData?.npcData || null;
+    const npcType = mapData?.npcType || 'ELITE2';
 
-    if (!npcData) return;
+    if (!npcData) {
+      const refreshHash = `no-map-data:${mapName}`;
+      const now = Date.now();
+      if (isDebugEnabled() && (state.debug.lastRefreshLogHash !== refreshHash || now - state.debug.lastRefreshLogAt > 10000)) {
+        state.debug.lastRefreshLogHash = refreshHash;
+        state.debug.lastRefreshLogAt = now;
+        debugWarn('No NPC mapping for current map:', {
+          mapName,
+          normalizedMapName: normalizeMapName(mapName)
+        });
+      }
+      return;
+    }
 
     const npcNames = npcData.split('/').map((x) => x.trim());
     let matherDetected = false;
+    let matchedCount = 0;
 
     npcNames.forEach((npcName, index) => {
       let timer = state.lootlogTimers[npcName] || null;
@@ -935,6 +994,8 @@
         }
       }
 
+      if (timer) matchedCount += 1;
+
       // Check for Mather in ELITE2 NPCs
       if (npcType === 'ELITE2' && timer && timer.addedByName && timer.addedByName.toLowerCase().includes('ilmather')) {
         matherDetected = true;
@@ -942,6 +1003,22 @@
 
       showToast(npcName, timer, index, npcType);
     });
+
+    const refreshHash = `render:${mapName}:${npcNames.length}:${matchedCount}:${Object.keys(state.lootlogTimers).length}`;
+    const now = Date.now();
+    if (isDebugEnabled() && (state.debug.lastRefreshLogHash !== refreshHash || now - state.debug.lastRefreshLogAt > 10000)) {
+      state.debug.lastRefreshLogHash = refreshHash;
+      state.debug.lastRefreshLogAt = now;
+      debugLog('Render summary:', {
+        mapName,
+        lookupMode: mapData?.lookupMode,
+        matchedKey: mapData?.matchedKey || null,
+        npcType,
+        npcOnMap: npcNames,
+        matchedTimers: matchedCount,
+        totalLoadedTimers: Object.keys(state.lootlogTimers).length
+      });
+    }
 
     if (matherDetected) {
       showMatherWarning();
