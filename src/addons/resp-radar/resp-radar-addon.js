@@ -169,6 +169,38 @@
       }
     }
 
+    // Fallback for slight map-name drift between game client and static mapping.
+    let bestMatch = null;
+    let bestScore = -1;
+    const allEntries = [
+      ...Object.keys(ELITE_II_DATA).map((key) => ({ key, npcType: 'ELITE2', npcData: ELITE_II_DATA[key] })),
+      ...Object.keys(TITAN_DATA).map((key) => ({ key, npcType: 'TITAN', npcData: TITAN_DATA[key] }))
+    ];
+
+    for (const entry of allEntries) {
+      const normalizedKey = normalizeMapName(entry.key);
+      if (!normalizedKey) continue;
+
+      const containsMatch =
+        normalizedMapName.includes(normalizedKey) || normalizedKey.includes(normalizedMapName);
+      if (!containsMatch) continue;
+
+      const score = Math.min(normalizedMapName.length, normalizedKey.length);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = entry;
+      }
+    }
+
+    if (bestMatch) {
+      return {
+        npcData: bestMatch.npcData,
+        npcType: bestMatch.npcType,
+        lookupMode: 'fuzzy',
+        matchedKey: bestMatch.key
+      };
+    }
+
     return null;
   }
 
@@ -942,6 +974,18 @@
 
     fetchLootlogTimers();
     const mapName = getCurrentMapName();
+    const refreshStateHash = `state:${state.visible}:${mapName || ''}:${Object.keys(state.lootlogTimers).length}`;
+    const refreshStateNow = Date.now();
+    if (isDebugEnabled() && (state.debug.lastRefreshLogHash !== refreshStateHash || refreshStateNow - state.debug.lastRefreshLogAt > 10000)) {
+      state.debug.lastRefreshLogHash = refreshStateHash;
+      state.debug.lastRefreshLogAt = refreshStateNow;
+      debugLog('refreshView state:', {
+        enabled: state.enabled,
+        visible: state.visible,
+        mapName,
+        totalLoadedTimers: Object.keys(state.lootlogTimers).length
+      });
+    }
     
     // Reset warning flag when map changes
     if (mapName !== state.currentMapName) {
@@ -1144,8 +1188,12 @@
     },
 
     async runWidget() {
-      await this.enable();
-      state.visible = !state.visible;
+      if (!state.enabled) {
+        await this.enable();
+        state.visible = true;
+      } else {
+        state.visible = !state.visible;
+      }
       refreshView();
       return true;
     },
