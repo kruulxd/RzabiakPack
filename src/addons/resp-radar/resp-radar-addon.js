@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-api-raw-v2';
+  const ADDON_BUILD = '2026-04-25-ws-dispatch-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 30000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
@@ -171,7 +171,8 @@
       url: null,
       capturedAt: 0,
       timerCount: 0,
-      hasActiveTimers: false
+      hasActiveTimers: false,
+      messageCount: 0
     },
     diagnostics: {
       build: ADDON_BUILD,
@@ -966,7 +967,8 @@
       timerCount,
       hasActiveTimers: hasActiveTimers(timers),
       arraysFound,
-      normalizedTimers
+      normalizedTimers,
+      messageCount: state.networkMeta.messageCount || 0
     };
   }
 
@@ -1033,12 +1035,14 @@
     try {
       if (typeof window.WebSocket === 'function' && !window.WebSocket.__rzpRespRadarWrapped) {
         const NativeWebSocket = window.WebSocket;
+        const nativeDispatchEvent = NativeWebSocket.prototype?.dispatchEvent;
         const WrappedWebSocket = function (...args) {
           const socket = new NativeWebSocket(...args);
           try {
             const wsUrl = String(args?.[0] || '');
             socket.addEventListener('message', (event) => {
               try {
+                state.networkMeta.messageCount = (state.networkMeta.messageCount || 0) + 1;
                 if (typeof event?.data !== 'string') return;
                 inspectNetworkText(event.data, { source: 'ws', url: wsUrl });
               } catch (error) {}
@@ -1054,6 +1058,22 @@
         WrappedWebSocket.CLOSED = NativeWebSocket.CLOSED;
         WrappedWebSocket.__rzpRespRadarWrapped = true;
         window.WebSocket = WrappedWebSocket;
+
+        if (typeof nativeDispatchEvent === 'function' && !NativeWebSocket.prototype.__rzpRespRadarDispatchWrapped) {
+          NativeWebSocket.prototype.dispatchEvent = function (event) {
+            try {
+              if (event?.type === 'message') {
+                state.networkMeta.messageCount = (state.networkMeta.messageCount || 0) + 1;
+                if (typeof event?.data === 'string') {
+                  const url = String(this?.url || '');
+                  inspectNetworkText(event.data, { source: 'ws-dispatch', url });
+                }
+              }
+            } catch (error) {}
+            return nativeDispatchEvent.call(this, event);
+          };
+          NativeWebSocket.prototype.__rzpRespRadarDispatchWrapped = true;
+        }
       }
     } catch (error) {}
   }
