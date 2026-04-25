@@ -8,11 +8,12 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-performance-throttle-v1';
+  const ADDON_BUILD = '2026-04-25-live-countdown-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
   const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
+  const UI_REFRESH_INTERVAL_MS = 1000;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -737,11 +738,16 @@
     if (minTime === null) minTime = maxTime;
     if (maxTime === null) return null;
 
+    const minRemainingSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+    const remainingSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+
     return {
       name: resolvedName,
       type: resolvedType,
-      minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
-      remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
+      minRemainingSeconds,
+      remainingSeconds,
+      _capturedAtMs: now,
+      _remainingAtCapture: remainingSeconds,
       _debug: {
         minRaw,
         maxRaw,
@@ -781,6 +787,8 @@
           type: inferredType,
           minRemainingSeconds: Math.max(0, hmsSeconds),
           remainingSeconds: Math.max(0, hmsSeconds),
+          _capturedAtMs: now,
+          _remainingAtCapture: Math.max(0, hmsSeconds),
           addedByName: null
         };
       }
@@ -795,6 +803,8 @@
         type: inferredType,
         minRemainingSeconds: Math.max(0, seconds),
         remainingSeconds: Math.max(0, seconds),
+        _capturedAtMs: now,
+        _remainingAtCapture: Math.max(0, seconds),
         addedByName: null
       };
     }
@@ -1991,6 +2001,27 @@
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
+  function getLiveRemainingSeconds(timer) {
+    if (!timer) return null;
+
+    const now = Date.now();
+    const parsedMaxTime = Number(timer?._debug?.parsedMaxTime);
+    if (Number.isFinite(parsedMaxTime) && parsedMaxTime > 0) {
+      return Math.max(0, Math.floor((parsedMaxTime - now) / 1000));
+    }
+
+    const capturedAt = Number(timer?._capturedAtMs);
+    const remainingAtCapture = Number(timer?._remainingAtCapture);
+    if (Number.isFinite(capturedAt) && Number.isFinite(remainingAtCapture)) {
+      const elapsedSeconds = Math.max(0, Math.floor((now - capturedAt) / 1000));
+      return Math.max(0, Math.floor(remainingAtCapture - elapsedSeconds));
+    }
+
+    const fallback = Number(timer.remainingSeconds);
+    if (!Number.isFinite(fallback)) return null;
+    return Math.max(0, Math.floor(fallback));
+  }
+
   function removeToasts() {
     document.querySelectorAll(`.${TOAST_CLASS}`).forEach((node) => node.remove());
   }
@@ -2006,16 +2037,17 @@
 
     const nameColor = npcType === 'TITAN' ? '#f87171' : '#fb7185';
 
-    const hasTimer = timer && typeof timer.remainingSeconds === 'number';
-    const timerExpired = hasTimer && timer.remainingSeconds <= 0;
-    const timerActive = hasTimer && timer.remainingSeconds > 0;
+    const liveRemainingSeconds = getLiveRemainingSeconds(timer);
+    const hasTimer = Number.isFinite(liveRemainingSeconds);
+    const timerExpired = hasTimer && liveRemainingSeconds <= 0;
+    const timerActive = hasTimer && liveRemainingSeconds > 0;
 
     if (timerActive) {
       node.innerHTML = `
         <span style="color:${nameColor};font-weight:700;">${npcName}</span>
         <span style="opacity:.65;"> - </span>
         <span>respi za</span>
-        <span style="color:#86efac;font-weight:700;">${formatTime(timer.remainingSeconds)}</span>
+        <span style="color:#86efac;font-weight:700;">${formatTime(liveRemainingSeconds)}</span>
       `;
     } else if (timerExpired) {
       node.innerHTML = `
@@ -2211,7 +2243,7 @@
 
   function startLoop() {
     stopLoop();
-    state.refreshIntervalId = setInterval(refreshView, state.settings.refreshMs);
+    state.refreshIntervalId = setInterval(refreshView, UI_REFRESH_INTERVAL_MS);
   }
 
   function ensureSettingsPanel() {
