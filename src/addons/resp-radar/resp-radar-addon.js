@@ -235,6 +235,55 @@
       .trim();
   }
 
+  function normalizeNpcName(name) {
+    if (!name) return '';
+    return String(name)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/ł/g, 'l')
+      .replace(/Ł/g, 'L')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function getTimerForNpcName(npcName, timers) {
+    if (!npcName || !timers || typeof timers !== 'object') return null;
+
+    if (timers[npcName]) {
+      return timers[npcName];
+    }
+
+    const normalizedNpcName = normalizeNpcName(npcName);
+    if (!normalizedNpcName) return null;
+
+    let bestTimer = null;
+    let bestScore = -1;
+
+    for (const [key, timer] of Object.entries(timers)) {
+      const normalizedKey = normalizeNpcName(key);
+      if (!normalizedKey) continue;
+
+      if (normalizedKey === normalizedNpcName) {
+        return timer;
+      }
+
+      const containsMatch =
+        normalizedKey.includes(normalizedNpcName) || normalizedNpcName.includes(normalizedKey);
+
+      if (!containsMatch) continue;
+
+      const score = Math.min(normalizedKey.length, normalizedNpcName.length);
+      if (score > bestScore) {
+        bestScore = score;
+        bestTimer = timer;
+      }
+    }
+
+    return bestTimer;
+  }
+
   function getNpcDataForMap(mapName) {
     if (!mapName) return null;
 
@@ -2251,15 +2300,7 @@
     const npcDebugRows = [];
 
     npcNames.forEach((npcName, index) => {
-      let timer = state.lootlogTimers[npcName] || null;
-      if (!timer) {
-        for (const key of Object.keys(state.lootlogTimers)) {
-          if (key.includes(npcName) || npcName.includes(key)) {
-            timer = state.lootlogTimers[key];
-            break;
-          }
-        }
-      }
+      const timer = getTimerForNpcName(npcName, state.lootlogTimers);
 
       if (timer) matchedCount += 1;
 
