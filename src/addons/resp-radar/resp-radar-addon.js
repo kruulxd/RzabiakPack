@@ -193,6 +193,8 @@
     timerWindowObserverBound: false,
     timerWindowObserver: null,
     lastTimerWindowTriggerAt: 0,
+    minuteWindowSnapshot: {},
+    minuteWindowSnapshotMapName: '',
     forcedRefreshTimeoutIds: [],
     networkHookInstalled: false,
     apiTimersCache: {},
@@ -1293,6 +1295,66 @@
     if (el.closest('#rzp-resp-radar-settings')) return true;
     return false;
   }
+
+  function normalizeMinuteWindowNpcName(nameText) {
+    if (!nameText) return '';
+    const cleaned = String(nameText)
+      .replace(/^\s*\[(?:E2|T)\]\s*/i, '')
+      .trim();
+    return normalizeNpcName(cleaned);
+  }
+
+  function readMinuteWindowTrackedTimers(trackedNpcNames) {
+    const result = {};
+    if (!Array.isArray(trackedNpcNames) || !trackedNpcNames.length) return result;
+
+    const trackedSet = new Set(trackedNpcNames);
+    const rows = document.querySelectorAll('.elite-timer-wnd .npc-list .row');
+    if (!rows.length) return result;
+
+    rows.forEach((row) => {
+      try {
+        const rawName = row.querySelector('.name-val')?.textContent || '';
+        const rawTime = row.querySelector('.time-val')?.textContent || '';
+        const npcName = normalizeMinuteWindowNpcName(rawName);
+        if (!npcName || !trackedSet.has(npcName)) return;
+
+        const seconds = parseHmsToSeconds(String(rawTime).trim());
+        if (!Number.isFinite(seconds)) return;
+        result[npcName] = seconds;
+      } catch (error) {}
+    });
+
+    return result;
+  }
+
+  function shouldTriggerFromMinuteWindowSnapshot(currentSnapshot, trackedNpcNames) {
+    const previousSnapshot = state.minuteWindowSnapshot || {};
+
+    for (const npcName of trackedNpcNames) {
+      const currentSeconds = Number(currentSnapshot[npcName]);
+      const previousSeconds = Number(previousSnapshot[npcName]);
+      const hasCurrent = Number.isFinite(currentSeconds);
+      const hadPrevious = Number.isFinite(previousSeconds);
+
+      // New timer row for tracked NPC appeared in minute window.
+      if (hasCurrent && !hadPrevious) return true;
+
+      // Timer renewed after kill (time jumps up instead of counting down).
+      if (hasCurrent && hadPrevious && currentSeconds > previousSeconds + 20) return true;
+    }
+
+    return false;
+  }
+
+  function isMinuteWindowMutationNode(node) {
+    if (!node) return false;
+    const el = node.nodeType === 1 ? node : node.parentElement;
+    if (!el || typeof el.closest !== 'function') return false;
+
+    return Boolean(el.closest('.elite-timer-wnd, .elite-timer, .npc-list, .window-list.elite-timer-wnd'));
+  }
+
   function isLikelyTimerWindowNode(node) {
     if (!node || node.nodeType !== 1) return false;
     const el = node;
@@ -1337,6 +1399,12 @@
 
       if (!trackedNpcNames.length) return;
 
+      const mapName = getCurrentMapName() || '';
+      if (state.minuteWindowSnapshotMapName !== mapName) {
+        state.minuteWindowSnapshotMapName = mapName;
+        state.minuteWindowSnapshot = {};
+      }
+
       for (const mutation of mutations) {
         const candidates = [];
 
@@ -1348,6 +1416,7 @@
 
         for (const node of candidates) {
           if (shouldSkipTimerWindowNode(node)) continue;
+          if (!isMinuteWindowMutationNode(node)) continue;
 
           let candidateNode = node;
           if (candidateNode.nodeType !== 1 && candidateNode.parentElement) {
@@ -1361,7 +1430,10 @@
             (typeof candidateNode.closest === 'function' && Boolean(candidateNode.closest('[id*="timer" i], [class*="timer" i], [class*="minut" i], [class*="lootlog" i], [class*="elite" i]')));
           if (!isLikelyWindowMutation) continue;
 
-          if (!nodeLooksLikeNpcTimerEntry(candidateNode, trackedNpcNames)) continue;
+          const currentSnapshot = readMinuteWindowTrackedTimers(trackedNpcNames);
+          const shouldTrigger = shouldTriggerFromMinuteWindowSnapshot(currentSnapshot, trackedNpcNames);
+          state.minuteWindowSnapshot = currentSnapshot;
+          if (!shouldTrigger) continue;
 
           state.lastTimerWindowTriggerAt = Date.now();
           scheduleForcedTimerRefresh();
@@ -1387,6 +1459,8 @@
 
   function disableTimerWindowRefreshHook() {
     clearForcedRefreshTimeouts();
+    state.minuteWindowSnapshot = {};
+    state.minuteWindowSnapshotMapName = '';
     if (!state.timerWindowObserverBound) return;
     try {
       state.timerWindowObserver?.disconnect?.();
