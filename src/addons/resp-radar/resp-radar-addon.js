@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-diagnostics-v2';
+  const ADDON_BUILD = '2026-04-25-network-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 30000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
@@ -142,16 +142,28 @@
     },
     lastAllKeysFallbackAt: 0,
     lastRuntimeScanAt: 0,
+    networkHookInstalled: false,
+    networkTimersCache: {},
+    networkMeta: {
+      source: null,
+      url: null,
+      capturedAt: 0,
+      timerCount: 0,
+      hasActiveTimers: false
+    },
     diagnostics: {
       build: ADDON_BUILD,
       source: 'none',
       storage: null,
       api: null,
+      network: null,
       runtime: null,
       dom: null,
+      hasActiveNetworkTimers: false,
       hasActiveApiTimers: false,
       hasActiveStorageTimers: false,
       hasActiveRuntimeTimers: false,
+      networkTimerCount: 0,
       apiTimerCount: 0,
       storageTimerCount: 0,
       runtimeTimerCount: 0,
@@ -731,6 +743,117 @@
     return Object.values(timers).some((timer) => Number(timer?.remainingSeconds) > 0);
   }
 
+  function buildTimersFromRoots(roots, world, now) {
+    const parsedTimers = {};
+    let arraysFound = 0;
+    let normalizedTimers = 0;
+
+    roots.forEach((root) => {
+      const arrays = collectGuildTimerArrays(root, world);
+      arraysFound += arrays.length;
+      arrays.forEach((timers) => {
+        timers.forEach((timer) => {
+          const normalized = normalizeTimerEntry(timer, now);
+          if (!normalized) return;
+          const existing = parsedTimers[normalized.name];
+          const picked = pickBetterTimer(existing, normalized);
+          if (picked !== existing) {
+            parsedTimers[normalized.name] = picked;
+            normalizedTimers += 1;
+          }
+        });
+      });
+    });
+
+    return { timers: parsedTimers, arraysFound, normalizedTimers };
+  }
+
+  function shouldInspectNetworkUrl(url) {
+    const value = String(url || '').toLowerCase();
+    return /lootlog|guild|timer|spawn|resp|query|cache/.test(value);
+  }
+
+  function maybeCaptureNetworkTimers(payload, meta) {
+    if (!payload || typeof payload !== 'object') return;
+    const world = getWorld();
+    const now = Date.now();
+    const { timers, arraysFound, normalizedTimers } = buildTimersFromRoots([payload], world, now);
+    const timerCount = Object.keys(timers).length;
+    if (!timerCount) return;
+
+    state.networkTimersCache = timers;
+    state.networkMeta = {
+      source: meta?.source || 'network',
+      url: meta?.url || null,
+      capturedAt: now,
+      timerCount,
+      hasActiveTimers: hasActiveTimers(timers),
+      arraysFound,
+      normalizedTimers
+    };
+  }
+
+  function inspectNetworkText(text, meta) {
+    if (typeof text !== 'string' || text.length < 2) return;
+    const parsed = safeJsonParse(text);
+    if (!parsed) return;
+    maybeCaptureNetworkTimers(parsed, meta);
+  }
+
+  function ensureNetworkTimerHook() {
+    if (state.networkHookInstalled) return;
+    state.networkHookInstalled = true;
+
+    try {
+      if (typeof window.fetch === 'function') {
+        const originalFetch = window.fetch;
+        window.fetch = function (...args) {
+          return originalFetch.apply(this, args).then((response) => {
+            try {
+              const url = String(args?.[0]?.url || args?.[0] || response?.url || '');
+              if (shouldInspectNetworkUrl(url) && response?.clone) {
+                const clone = response.clone();
+                clone.text().then((text) => {
+                  inspectNetworkText(text, { source: 'fetch', url });
+                }).catch(() => {});
+              }
+            } catch (error) {}
+            return response;
+          });
+        };
+      }
+    } catch (error) {}
+
+    try {
+      if (window.XMLHttpRequest && window.XMLHttpRequest.prototype) {
+        const proto = window.XMLHttpRequest.prototype;
+        const originalOpen = proto.open;
+        const originalSend = proto.send;
+
+        proto.open = function (method, url, ...rest) {
+          try {
+            this.__rzpRespRadarUrl = String(url || '');
+          } catch (error) {}
+          return originalOpen.call(this, method, url, ...rest);
+        };
+
+        proto.send = function (...args) {
+          try {
+            this.addEventListener('load', () => {
+              try {
+                const url = String(this.__rzpRespRadarUrl || this.responseURL || '');
+                if (!shouldInspectNetworkUrl(url)) return;
+                if (typeof this.responseText !== 'string') return;
+                inspectNetworkText(this.responseText, { source: 'xhr', url });
+              } catch (error) {}
+            });
+          } catch (error) {}
+          return originalSend.apply(this, args);
+        };
+      }
+    } catch (error) {}
+  }
+
   function parseTimersFromLootlogStorage(world) {
     const now = Date.now();
     const parsedTimers = {};
@@ -1153,6 +1276,10 @@
       const storageTimerCount = Object.keys(fromStorage).length;
       const hasActiveStorageTimers = hasActiveTimers(fromStorage);
 
+      const fromNetwork = state.networkTimersCache || {};
+      const networkTimerCount = Object.keys(fromNetwork).length;
+      const hasActiveNetworkTimers = hasActiveTimers(fromNetwork);
+
       const apiResult = parseTimersFromLootlogApi(world);
       const fromApi = apiResult.timers || {};
       const apiTimerCount = Object.keys(fromApi).length;
@@ -1183,13 +1310,37 @@
 
       state.diagnostics.storage = storageResult.diagnostics;
       state.diagnostics.api = apiResult.diagnostics;
+      state.diagnostics.network = {
+        source: state.networkMeta.source,
+        url: state.networkMeta.url,
+        capturedAt: state.networkMeta.capturedAt,
+        timerCount: state.networkMeta.timerCount,
+        hasActiveTimers: state.networkMeta.hasActiveTimers,
+        arraysFound: state.networkMeta.arraysFound || 0,
+        normalizedTimers: state.networkMeta.normalizedTimers || 0
+      };
       state.diagnostics.runtime = runtimeResult.diagnostics;
+      state.diagnostics.hasActiveNetworkTimers = hasActiveNetworkTimers;
       state.diagnostics.hasActiveApiTimers = hasActiveApiTimers;
       state.diagnostics.hasActiveStorageTimers = hasActiveStorageTimers;
       state.diagnostics.hasActiveRuntimeTimers = hasActiveRuntimeTimers;
+      state.diagnostics.networkTimerCount = networkTimerCount;
       state.diagnostics.apiTimerCount = apiTimerCount;
       state.diagnostics.storageTimerCount = storageTimerCount;
       state.diagnostics.runtimeTimerCount = runtimeTimerCount;
+
+      const preferNetwork =
+        networkTimerCount > 0 &&
+        (hasActiveNetworkTimers || (!hasActiveApiTimers && !hasActiveStorageTimers && !hasActiveRuntimeTimers));
+
+      if (preferNetwork) {
+        state.lootlogTimers = fromNetwork;
+        state.diagnostics.source = 'network';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
+        logTimerDiagnostics(state.diagnostics.network, networkTimerCount, null, 0, 'network');
+        return;
+      }
 
       const preferApi =
         apiTimerCount > 0 &&
@@ -1643,6 +1794,7 @@
     async enable() {
       state.enabled = true;
       state.settings = loadSettings();
+      ensureNetworkTimerHook();
       ensureStyle();
       enableResizeRefresh();
       startLoop();
