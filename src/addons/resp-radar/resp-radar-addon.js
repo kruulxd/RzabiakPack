@@ -617,17 +617,21 @@
       timer.nextRespawnAt ??
       timer.endTime;
 
+    const remainingRaw =
+      timer.remainingSeconds ??
+      timer.remaining ??
+      timer.timeLeft ??
+      timer.secondsLeft ??
+      timer.maxRemainingSeconds ??
+      timer.countdown ??
+      timer.timeToSpawn ??
+      timer.time;
+
     let minTime = toTimestamp(minRaw);
     let maxTime = toTimestamp(maxRaw);
 
     if (maxTime === null) {
-      const remaining = toSeconds(
-        timer.remainingSeconds ??
-        timer.remaining ??
-        timer.timeLeft ??
-        timer.secondsLeft ??
-        timer.maxRemainingSeconds
-      );
+      const remaining = toSeconds(remainingRaw);
       if (remaining !== null) {
         maxTime = now + remaining * 1000;
       }
@@ -653,6 +657,13 @@
       type,
       minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
       remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
+      _debug: {
+        minRaw,
+        maxRaw,
+        remainingRaw,
+        parsedMinTime: minTime,
+        parsedMaxTime: maxTime
+      },
       addedByName:
         timer.member?.name ||
         timer.addedByName ||
@@ -660,6 +671,39 @@
         timer.author?.name ||
         null
     };
+  }
+
+  function getTimerQualityScore(timer) {
+    if (!timer) return -1;
+    const remaining = Number(timer.remainingSeconds);
+    let score = 0;
+    if (Number.isFinite(remaining) && remaining > 0) score += 20;
+    if (Number.isFinite(remaining) && remaining >= 60) score += 4;
+    if (Number.isFinite(remaining) && remaining <= 0) score -= 10;
+    if (timer._debug?.maxRaw !== undefined && timer._debug?.maxRaw !== null) score += 3;
+    if (timer._debug?.remainingRaw !== undefined && timer._debug?.remainingRaw !== null) score += 2;
+    return score;
+  }
+
+  function pickBetterTimer(existing, candidate) {
+    if (!existing) return candidate;
+    const existingScore = getTimerQualityScore(existing);
+    const candidateScore = getTimerQualityScore(candidate);
+
+    if (candidateScore > existingScore) return candidate;
+    if (candidateScore < existingScore) return existing;
+
+    // Tie-break: prefer closer non-zero resp, but never replace non-zero with zero.
+    const existingRemaining = Number(existing.remainingSeconds);
+    const candidateRemaining = Number(candidate.remainingSeconds);
+    const existingPositive = Number.isFinite(existingRemaining) && existingRemaining > 0;
+    const candidatePositive = Number.isFinite(candidateRemaining) && candidateRemaining > 0;
+
+    if (candidatePositive && !existingPositive) return candidate;
+    if (!candidatePositive && existingPositive) return existing;
+    if (candidatePositive && existingPositive && candidateRemaining < existingRemaining) return candidate;
+
+    return existing;
   }
 
   function parseTimersFromLootlogStorage(world) {
@@ -702,12 +746,9 @@
               if (!normalized) return;
 
               const existing = parsedTimers[normalized.name];
-              const existingRemaining = existing?.remainingSeconds ?? -1;
-              const nextRemaining = normalized.remainingSeconds;
-
-              // Prefer non-zero / larger value so stale 00:00 snapshots do not overwrite valid timers.
-              if (!existing || nextRemaining > existingRemaining) {
-                parsedTimers[normalized.name] = normalized;
+              const picked = pickBetterTimer(existing, normalized);
+              if (picked !== existing) {
+                parsedTimers[normalized.name] = picked;
                 diagnostics.normalizedTimers += 1;
               }
             });
@@ -1070,6 +1111,7 @@
     const npcNames = npcData.split('/').map((x) => x.trim());
     let matherDetected = false;
     let matchedCount = 0;
+    const npcDebugRows = [];
 
     npcNames.forEach((npcName, index) => {
       let timer = state.lootlogTimers[npcName] || null;
@@ -1083,6 +1125,17 @@
       }
 
       if (timer) matchedCount += 1;
+
+      if (isDebugEnabled()) {
+        npcDebugRows.push({
+          npcName,
+          matched: Boolean(timer),
+          remainingSeconds: timer?.remainingSeconds ?? null,
+          minRemainingSeconds: timer?.minRemainingSeconds ?? null,
+          addedByName: timer?.addedByName || null,
+          rawTimes: timer?._debug || null
+        });
+      }
 
       // Check for Mather in ELITE2 NPCs
       if (npcType === 'ELITE2' && timer && timer.addedByName && timer.addedByName.toLowerCase().includes('ilmather')) {
@@ -1106,6 +1159,7 @@
         matchedTimers: matchedCount,
         totalLoadedTimers: Object.keys(state.lootlogTimers).length
       });
+      debugLog('NPC timer details:', npcDebugRows);
     }
 
     if (matherDetected) {
