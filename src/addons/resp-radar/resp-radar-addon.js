@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-live-countdown-v1';
+  const ADDON_BUILD = '2026-04-25-fast-path-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
@@ -1752,12 +1752,6 @@
       const world = getWorld();
       pollLootlogTimersApi(world);
 
-      const storageResult = parseTimersFromLootlogStorage(world);
-      const fromStorage = storageResult.timers || {};
-      lastStorageTimers = fromStorage;
-      const storageTimerCount = Object.keys(fromStorage).length;
-      const hasActiveStorageTimers = hasActiveTimers(fromStorage);
-
       const fromNetwork = state.networkTimersCache || {};
       const networkTimerCount = Object.keys(fromNetwork).length;
       const hasActiveNetworkTimers = hasActiveTimers(fromNetwork);
@@ -1766,6 +1760,46 @@
       const fromPersisted = persistedResult.timers || {};
       const persistedTimerCount = Object.keys(fromPersisted).length;
       const hasActivePersistedTimers = hasActiveTimers(fromPersisted);
+
+      state.diagnostics.network = {
+        source: state.networkMeta.source,
+        url: state.networkMeta.url,
+        capturedAt: state.networkMeta.capturedAt,
+        timerCount: state.networkMeta.timerCount,
+        hasActiveTimers: state.networkMeta.hasActiveTimers,
+        arraysFound: state.networkMeta.arraysFound || 0,
+        normalizedTimers: state.networkMeta.normalizedTimers || 0,
+        messageCount: state.networkMeta.messageCount || 0,
+        lastPollAt: state.lastNetworkPollAt || 0,
+        lastPollStatus: state.lastNetworkPollStatus || 'idle'
+      };
+      state.diagnostics.persisted = persistedResult.diagnostics;
+      state.diagnostics.hasActiveNetworkTimers = hasActiveNetworkTimers;
+      state.diagnostics.hasActivePersistedTimers = hasActivePersistedTimers;
+      state.diagnostics.networkTimerCount = networkTimerCount;
+      state.diagnostics.persistedTimerCount = persistedTimerCount;
+
+      if (hasActiveNetworkTimers && networkTimerCount > 0) {
+        state.lootlogTimers = fromNetwork;
+        state.diagnostics.source = 'network';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
+        return;
+      }
+
+      if (hasActivePersistedTimers && persistedTimerCount > 0) {
+        state.lootlogTimers = fromPersisted;
+        state.diagnostics.source = 'persisted';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
+        return;
+      }
+
+      const storageResult = parseTimersFromLootlogStorage(world);
+      const fromStorage = storageResult.timers || {};
+      lastStorageTimers = fromStorage;
+      const storageTimerCount = Object.keys(fromStorage).length;
+      const hasActiveStorageTimers = hasActiveTimers(fromStorage);
 
       const apiResult = parseTimersFromLootlogApi(world);
       const fromApi = apiResult.timers || {};
@@ -1810,27 +1844,10 @@
         arraysFound: state.apiMeta.arraysFound || 0,
         normalizedTimers: state.apiMeta.normalizedTimers || 0
       };
-      state.diagnostics.network = {
-        source: state.networkMeta.source,
-        url: state.networkMeta.url,
-        capturedAt: state.networkMeta.capturedAt,
-        timerCount: state.networkMeta.timerCount,
-        hasActiveTimers: state.networkMeta.hasActiveTimers,
-        arraysFound: state.networkMeta.arraysFound || 0,
-        normalizedTimers: state.networkMeta.normalizedTimers || 0,
-        messageCount: state.networkMeta.messageCount || 0,
-        lastPollAt: state.lastNetworkPollAt || 0,
-        lastPollStatus: state.lastNetworkPollStatus || 'idle'
-      };
-      state.diagnostics.persisted = persistedResult.diagnostics;
       state.diagnostics.runtime = runtimeResult.diagnostics;
-      state.diagnostics.hasActiveNetworkTimers = hasActiveNetworkTimers;
-      state.diagnostics.hasActivePersistedTimers = hasActivePersistedTimers;
       state.diagnostics.hasActiveApiTimers = hasActiveApiTimers;
       state.diagnostics.hasActiveStorageTimers = hasActiveStorageTimers;
       state.diagnostics.hasActiveRuntimeTimers = hasActiveRuntimeTimers;
-      state.diagnostics.networkTimerCount = networkTimerCount;
-      state.diagnostics.persistedTimerCount = persistedTimerCount;
       state.diagnostics.apiTimerCount = apiTimerCount;
       state.diagnostics.storageTimerCount = storageTimerCount;
       state.diagnostics.runtimeTimerCount = runtimeTimerCount;
