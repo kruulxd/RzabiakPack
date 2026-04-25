@@ -87,7 +87,11 @@
     'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/resp-radar/resp-radar-addon.js',
     'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/kalendarz/kalendarz-addon.js',
     'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/random-group/random-group-addon.js',
-    'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/super-sprzedawca/super-sprzedawca-addon.js'
+    'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/super-sprzedawca/super-sprzedawca-addon.js',
+    'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/sorry-missclick/sorry-missclick-addon.js',
+    'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/auto-summon/auto-summon-addon.js',
+    'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/szybka-walka/szybka-walka-addon.js',
+    'https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/src/addons/autoheal/autoheal-addon.js'
   ];
 
   const ADDON_ITEMS = [
@@ -148,12 +152,14 @@
     },
     {
       id: 'autoheal',
-      name: 'Autoheal',
-      description: 'Automatyczne leczenie postaci po walce, gdy HP poniżej wyznaczonego poziomu.',
-      dockIcon: '❤️',
-      dockTitle: 'Autoheal - widget',
+      name: 'AutoHeal',
+      description: 'Automatycznie używa mikstur leczących po walce gdy HP spadnie poniżej progu.',
+      dockIcon: '💊',
+      dockTitle: 'AutoHeal',
       requiredInterface: 'NI',
-      wip: true
+      showInDock: true,
+      lpmHint: 'LPM - włącz/wyłącz',
+      hasSettings: true
     },
     {
       id: 'relogger',
@@ -188,27 +194,33 @@
       name: 'Sorry, missclick',
       description: 'Blokuje próby ataku przyjaciół, klanowiczów oraz sojuszników.',
       dockIcon: '🛡',
-      dockTitle: 'Sorry, missclick - widget',
+      dockTitle: 'Sorry, missclick',
       requiredInterface: 'NI',
-      wip: true
+      showInDock: true,
+      ppmOnly: true,
+      hasSettings: true
     },
     {
       id: 'auto-summon',
       name: 'Auto-summon',
       description: 'Automatycznie akceptuje przywołanie do grupy.',
       dockIcon: '🔮',
-      dockTitle: 'Auto-summon - widget',
+      dockTitle: 'Auto-summon',
       requiredInterface: 'NI',
-      wip: true
+      showInDock: true,
+      lpmHint: 'LPM - włącz/wyłącz',
+      hasSettings: true
     },
     {
       id: 'szybka-walka',
       name: 'Szybka walka',
       description: 'Automatycznie daje szybką walkę [F].',
       dockIcon: '⚡',
-      dockTitle: 'Szybka walka - widget',
+      dockTitle: 'Szybka walka',
       requiredInterface: 'NI',
-      wip: true
+      showInDock: true,
+      lpmHint: 'LPM - włącz/wyłącz',
+      hasSettings: true
     },
     {
       id: 'run-to-hero',
