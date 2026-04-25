@@ -167,7 +167,7 @@
 
   const state = {
     enabled: false,
-    visible: true,
+    visible: false,
     settings: { ...DEFAULT_SETTINGS },
     lootlogTimers: {},
     currentMapName: null,
