@@ -7,6 +7,7 @@
   const PANEL_ID = 'rzp-resp-radar-settings';
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
+  const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
 
   const DEFAULT_SETTINGS = {
     position: 'bottom-center',
@@ -204,30 +205,10 @@
     return null;
   }
 
-  function isDebugEnabled() {
-    try {
-      const saved = window.localStorage.getItem(DEBUG_STORAGE_KEY);
-      if (saved === null) return true;
-      return saved === '1' || saved === 'true' || saved === 'on';
-    } catch (error) {
-      return true;
-    }
-  }
-
-  function debugLog(...args) {
-    if (!isDebugEnabled()) return;
-    console.log('[RespRadar]', ...args);
-  }
-
-  function debugWarn(...args) {
-    if (!isDebugEnabled()) return;
-    console.warn('[RespRadar]', ...args);
-  }
-
-  function debugError(...args) {
-    if (!isDebugEnabled()) return;
-    console.error('[RespRadar]', ...args);
-  }
+  const isDebugEnabled = () => false;
+  const debugLog = () => {};
+  const debugWarn = () => {};
+  const debugError = () => {};
 
   function loadSettings() {
     try {
