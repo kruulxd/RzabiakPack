@@ -443,6 +443,24 @@
     return null;
   }
 
+  function toSeconds(value) {
+    if (value === null || value === undefined) return null;
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      if (value < 0) return null;
+      // Heuristic: large values are probably milliseconds.
+      if (value > 100000) return Math.floor(value / 1000);
+      return Math.floor(value);
+    }
+
+    if (typeof value === 'string') {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return toSeconds(numeric);
+    }
+
+    return null;
+  }
+
   function normalizeNpcType(rawType) {
     if (!rawType || typeof rawType !== 'string') return null;
     const type = rawType.toUpperCase();
@@ -586,23 +604,45 @@
       timer.minRespawnTime ??
       timer.minRespTime ??
       timer.minTime ??
-      timer.respawnFrom;
+      timer.respawnFrom ??
+      timer.nextSpawnFrom;
     const maxRaw =
       timer.maxSpawnTime ??
       timer.maxRespawnTime ??
       timer.maxRespTime ??
       timer.maxTime ??
       timer.respawnTo ??
-      timer.spawnTime;
+      timer.spawnTime ??
+      timer.nextSpawnTime ??
+      timer.nextRespawnAt ??
+      timer.endTime;
 
     let minTime = toTimestamp(minRaw);
     let maxTime = toTimestamp(maxRaw);
 
     if (maxTime === null) {
-      const remaining = Number(timer.remainingSeconds ?? timer.remaining ?? timer.timeLeft);
-      if (Number.isFinite(remaining) && remaining >= 0) {
+      const remaining = toSeconds(
+        timer.remainingSeconds ??
+        timer.remaining ??
+        timer.timeLeft ??
+        timer.secondsLeft ??
+        timer.maxRemainingSeconds
+      );
+      if (remaining !== null) {
         maxTime = now + remaining * 1000;
       }
+    }
+
+    if (minTime === null) {
+      const minRemaining = toSeconds(timer.minRemainingSeconds);
+      if (minRemaining !== null) {
+        minTime = now + minRemaining * 1000;
+      }
+    }
+
+    // Some payloads expose the future timestamp in min field while max field is stale.
+    if (maxTime !== null && maxTime <= now && minTime !== null && minTime > now) {
+      maxTime = minTime;
     }
 
     if (minTime === null) minTime = maxTime;
@@ -662,7 +702,11 @@
               if (!normalized) return;
 
               const existing = parsedTimers[normalized.name];
-              if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
+              const existingRemaining = existing?.remainingSeconds ?? -1;
+              const nextRemaining = normalized.remainingSeconds;
+
+              // Prefer non-zero / larger value so stale 00:00 snapshots do not overwrite valid timers.
+              if (!existing || nextRemaining > existingRemaining) {
                 parsedTimers[normalized.name] = normalized;
                 diagnostics.normalizedTimers += 1;
               }
