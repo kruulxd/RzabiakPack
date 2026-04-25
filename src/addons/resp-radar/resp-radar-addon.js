@@ -6,6 +6,7 @@
   const STYLE_ID = 'rzp-resp-radar-style';
   const PANEL_ID = 'rzp-resp-radar-settings';
   const STORAGE_KEY = 'rzp_resp_radar_settings';
+  const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
 
   const DEFAULT_SETTINGS = {
     position: 'bottom-center',
@@ -126,8 +127,37 @@
     currentMapName: null,
     refreshIntervalId: null,
     resizeHandlerBound: false,
-    matherWarningShown: false
+    matherWarningShown: false,
+    debug: {
+      lastSummaryAt: 0,
+      lastSummaryHash: ''
+    }
   };
+
+  function isDebugEnabled() {
+    try {
+      const saved = window.localStorage.getItem(DEBUG_STORAGE_KEY);
+      if (saved === null) return true;
+      return saved === '1' || saved === 'true' || saved === 'on';
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function debugLog(...args) {
+    if (!isDebugEnabled()) return;
+    console.log('[RespRadar]', ...args);
+  }
+
+  function debugWarn(...args) {
+    if (!isDebugEnabled()) return;
+    console.warn('[RespRadar]', ...args);
+  }
+
+  function debugError(...args) {
+    if (!isDebugEnabled()) return;
+    console.error('[RespRadar]', ...args);
+  }
 
   function loadSettings() {
     try {
@@ -389,6 +419,12 @@
     return entries;
   }
 
+  function buildStorageSignature(entries) {
+    return entries
+      .map(([key, value]) => `${key}:${value.length}`)
+      .join('|');
+  }
+
   function isTimerLikeArray(node) {
     if (!Array.isArray(node) || node.length === 0) return false;
 
@@ -520,6 +556,16 @@
     const now = Date.now();
     const parsedTimers = {};
     const entries = getLootlogStorageEntries(false);
+    const diagnostics = {
+      world,
+      filteredEntryCount: entries.length,
+      allEntryCount: 0,
+      rootsScanned: 0,
+      arraysFound: 0,
+      normalizedTimers: 0,
+      usedFallbackAllKeys: false,
+      scannedKeys: entries.map(([key]) => key)
+    };
 
     const parseFromEntries = (list) => {
       for (const [, rawValue] of list) {
@@ -537,7 +583,9 @@
         }
 
         for (const root of roots) {
+          diagnostics.rootsScanned += 1;
           const timerArrays = collectGuildTimerArrays(root, world);
+          diagnostics.arraysFound += timerArrays.length;
           timerArrays.forEach((timers) => {
             timers.forEach((timer) => {
               const normalized = normalizeTimerEntry(timer, now);
@@ -546,6 +594,7 @@
               const existing = parsedTimers[normalized.name];
               if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
                 parsedTimers[normalized.name] = normalized;
+                diagnostics.normalizedTimers += 1;
               }
             });
           });
@@ -557,20 +606,32 @@
 
     // Fallback for new Lootlog versions that persist under generic keys.
     if (!Object.keys(parsedTimers).length) {
-      parseFromEntries(getLootlogStorageEntries(true));
+      const allEntries = getLootlogStorageEntries(true);
+      diagnostics.usedFallbackAllKeys = true;
+      diagnostics.allEntryCount = allEntries.length;
+      diagnostics.scannedKeys = allEntries.map(([key]) => key);
+      parseFromEntries(allEntries);
     }
 
-    return parsedTimers;
+    return { timers: parsedTimers, diagnostics };
   }
 
   function parseTimersFromLootlogDom() {
     const fromDom = {};
+    const diagnostics = {
+      foundRoot: false,
+      textLength: 0,
+      matchCount: 0
+    };
 
     try {
       const timerRoot = document.querySelector('.elite-timer-wnd, [class*="ll-timer"], [class*="timer"]');
-      if (!timerRoot) return fromDom;
+      if (!timerRoot) return { timers: fromDom, diagnostics };
+
+      diagnostics.foundRoot = true;
 
       const text = (timerRoot.textContent || '').replace(/\s+/g, ' ');
+      diagnostics.textLength = text.length;
       const regex = /\[(E2|T)\]\s*([^\d\[]+?)\s*(\d{2}:\d{2}:\d{2})/gi;
       let match;
 
@@ -590,23 +651,80 @@
           remainingSeconds: parts[0] * 3600 + parts[1] * 60 + parts[2],
           addedByName: null
         };
+        diagnostics.matchCount += 1;
       }
     } catch (error) {}
 
-    return fromDom;
+    return { timers: fromDom, diagnostics };
+  }
+
+  function logTimerDiagnostics(storageDiagnostics, storageTimerCount, domDiagnostics, domTimerCount, source) {
+    if (!isDebugEnabled()) return;
+
+    const now = Date.now();
+    const summaryHash = [
+      source,
+      storageTimerCount,
+      domTimerCount,
+      storageDiagnostics?.filteredEntryCount || 0,
+      storageDiagnostics?.allEntryCount || 0,
+      storageDiagnostics?.arraysFound || 0,
+      domDiagnostics?.matchCount || 0
+    ].join(':');
+
+    const shouldLogSummary =
+      state.debug.lastSummaryHash !== summaryHash ||
+      now - state.debug.lastSummaryAt > 12000;
+
+    if (!shouldLogSummary) return;
+
+    state.debug.lastSummaryHash = summaryHash;
+    state.debug.lastSummaryAt = now;
+
+    debugLog('Timer source:', source, '| world:', storageDiagnostics?.world);
+    debugLog('Storage diagnostics:', {
+      filteredEntryCount: storageDiagnostics?.filteredEntryCount || 0,
+      allEntryCount: storageDiagnostics?.allEntryCount || 0,
+      rootsScanned: storageDiagnostics?.rootsScanned || 0,
+      arraysFound: storageDiagnostics?.arraysFound || 0,
+      normalizedTimers: storageDiagnostics?.normalizedTimers || 0,
+      usedFallbackAllKeys: Boolean(storageDiagnostics?.usedFallbackAllKeys),
+      scannedKeys: storageDiagnostics?.scannedKeys || []
+    });
+    debugLog('DOM diagnostics:', {
+      foundRoot: Boolean(domDiagnostics?.foundRoot),
+      textLength: domDiagnostics?.textLength || 0,
+      matchCount: domDiagnostics?.matchCount || 0
+    });
+
+    if (storageTimerCount > 0 || domTimerCount > 0) {
+      const names = Object.keys(state.lootlogTimers).slice(0, 10);
+      debugLog('Loaded timers:', names, '| total:', Object.keys(state.lootlogTimers).length);
+    } else {
+      debugWarn('No timers found in storage and DOM in this cycle.');
+    }
   }
 
   function fetchLootlogTimers() {
     try {
       const world = getWorld();
-      const fromStorage = parseTimersFromLootlogStorage(world);
-      if (Object.keys(fromStorage).length) {
+      const storageResult = parseTimersFromLootlogStorage(world);
+      const fromStorage = storageResult.timers || {};
+      const storageTimerCount = Object.keys(fromStorage).length;
+
+      if (storageTimerCount) {
         state.lootlogTimers = fromStorage;
+        logTimerDiagnostics(storageResult.diagnostics, storageTimerCount, null, 0, 'storage');
         return;
       }
 
-      state.lootlogTimers = parseTimersFromLootlogDom();
+      const domResult = parseTimersFromLootlogDom();
+      const fromDom = domResult.timers || {};
+      const domTimerCount = Object.keys(fromDom).length;
+      state.lootlogTimers = fromDom;
+      logTimerDiagnostics(storageResult.diagnostics, storageTimerCount, domResult.diagnostics, domTimerCount, domTimerCount ? 'dom' : 'none');
     } catch (error) {
+      debugError('fetchLootlogTimers failed:', error);
       state.lootlogTimers = {};
     }
   }
