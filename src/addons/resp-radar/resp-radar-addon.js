@@ -192,6 +192,7 @@
     lastNetworkPollStatus: 'idle',
     battleLogObserverBound: false,
     battleLogObserver: null,
+    battleWasActive: false,
     lastBattleLogTriggerAt: 0,
     battleRefreshTimeoutIds: [],
     networkHookInstalled: false,
@@ -1311,6 +1312,36 @@
     return false;
   }
 
+  function isBattleActiveForRadar() {
+    try {
+      const battle = window.Engine?.battle;
+      if (battle) {
+        if (typeof battle.isBattle === 'function') return Boolean(battle.isBattle());
+        if (typeof battle.isActive === 'function') return Boolean(battle.isActive());
+        if (typeof battle.isOpened === 'function') return Boolean(battle.isOpened());
+
+        const boolKeys = ['inBattle', 'isBattle', 'active', 'opened', 'isOpened', 'visible'];
+        for (const key of boolKeys) {
+          const value = battle[key];
+          if (typeof value === 'boolean') return value;
+        }
+      }
+    } catch (error) {}
+
+    try {
+      if (window.g?.battle) return true;
+    } catch (error) {}
+
+    const btn = document.querySelector('.auto-fight-btn');
+    if (!btn) return false;
+
+    try {
+      return getComputedStyle(btn).display !== 'none' && getComputedStyle(btn).visibility !== 'hidden';
+    } catch (error) {
+      return true;
+    }
+  }
+
   function enableBattleLogRefreshHook() {
     if (state.battleLogObserverBound) return;
     if (typeof MutationObserver !== 'function') return;
@@ -1331,6 +1362,16 @@
         .filter(Boolean);
 
       if (!trackedNpcNames.length) return;
+
+      const nowInBattle = isBattleActiveForRadar();
+      if (nowInBattle) {
+        state.battleWasActive = true;
+      } else if (state.battleWasActive) {
+        state.battleWasActive = false;
+        state.lastBattleLogTriggerAt = now;
+        scheduleForcedTimerRefresh();
+        return;
+      }
 
       for (const mutation of mutations) {
         const candidates = [];
@@ -1375,6 +1416,7 @@
 
   function disableBattleLogRefreshHook() {
     clearBattleRefreshTimeouts();
+    state.battleWasActive = false;
     if (!state.battleLogObserverBound) return;
     try {
       state.battleLogObserver?.disconnect?.();
@@ -2624,6 +2666,7 @@
     async enable() {
       state.enabled = true;
       state.settings = loadSettings();
+      state.battleWasActive = isBattleActiveForRadar();
       state.warmupUntil = Date.now() + STARTUP_WARMUP_MS;
       state.lastDataRefreshAt = 0;
       state.lastNetworkPollAt = 0;
