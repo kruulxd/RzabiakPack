@@ -14,6 +14,7 @@
   const STARTUP_WARMUP_MS = 20000;
   const STARTUP_MIN_REFRESH_MS = 1000;
   const STARTUP_POLL_COOLDOWN_MS = 1500;
+  const LOOTLOG_STORAGE_WATCH_INTERVAL_MS = 2000;
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
   const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
   const UI_REFRESH_INTERVAL_MS = 1000;
@@ -195,6 +196,8 @@
     lastTimerWindowTriggerAt: 0,
     minuteWindowSnapshot: {},
     minuteWindowSnapshotMapName: '',
+    lootlogStorageWatchIntervalId: null,
+    lootlogStorageSignature: '',
     forcedRefreshTimeoutIds: [],
     networkHookInstalled: false,
     apiTimersCache: {},
@@ -649,8 +652,55 @@
 
   function buildStorageSignature(entries) {
     return entries
-      .map(([key, value]) => `${key}:${value.length}`)
+      .map(([key, value]) => {
+        const head = String(value).slice(0, 24);
+        const tail = String(value).slice(-24);
+        return `${key}:${value.length}:${head}:${tail}`;
+      })
       .join('|');
+  }
+
+  function getLootlogStorageFingerprint() {
+    try {
+      const entries = getLootlogStorageEntries(false);
+      return buildStorageSignature(entries);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function checkLootlogStorageRefreshTrigger() {
+    if (!state.enabled) return;
+
+    const nextSignature = getLootlogStorageFingerprint();
+    if (!nextSignature) return;
+
+    if (!state.lootlogStorageSignature) {
+      state.lootlogStorageSignature = nextSignature;
+      return;
+    }
+
+    if (nextSignature === state.lootlogStorageSignature) return;
+
+    state.lootlogStorageSignature = nextSignature;
+    scheduleForcedTimerRefresh();
+  }
+
+  function startLootlogStorageWatcher() {
+    if (state.lootlogStorageWatchIntervalId) return;
+    state.lootlogStorageSignature = getLootlogStorageFingerprint();
+    state.lootlogStorageWatchIntervalId = setInterval(
+      checkLootlogStorageRefreshTrigger,
+      LOOTLOG_STORAGE_WATCH_INTERVAL_MS
+    );
+  }
+
+  function stopLootlogStorageWatcher() {
+    if (state.lootlogStorageWatchIntervalId) {
+      clearInterval(state.lootlogStorageWatchIntervalId);
+      state.lootlogStorageWatchIntervalId = null;
+    }
+    state.lootlogStorageSignature = '';
   }
 
   function isTimerLikeArray(node) {
@@ -1495,6 +1545,7 @@
 
   function disableTimerWindowRefreshHook() {
     clearForcedRefreshTimeouts();
+    stopLootlogStorageWatcher();
     state.minuteWindowSnapshot = {};
     state.minuteWindowSnapshotMapName = '';
     if (!state.timerWindowObserverBound) return;
@@ -2752,6 +2803,7 @@
       state.lastDataRefreshAt = 0;
       state.lastNetworkPollAt = 0;
       ensureNetworkTimerHook();
+      startLootlogStorageWatcher();
       enableTimerWindowRefreshHook();
       ensureStyle();
       enableResizeRefresh();
