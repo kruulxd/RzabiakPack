@@ -8,8 +8,8 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-ws-dispatch-v1';
-  const ALL_KEYS_FALLBACK_COOLDOWN_MS = 30000;
+  const ADDON_BUILD = '2026-04-25-storage-map-ws-v1';
+  const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
   const RUNTIME_SCAN_MAX_DEPTH = 8;
@@ -979,6 +979,29 @@
     maybeCaptureNetworkTimers(parsed, meta);
   }
 
+  function inspectNetworkPayload(payload, meta) {
+    if (typeof payload === 'string') {
+      inspectNetworkText(payload, meta);
+      return;
+    }
+
+    try {
+      if (payload instanceof Blob) {
+        payload.text().then((text) => {
+          inspectNetworkText(text, meta);
+        }).catch(() => {});
+        return;
+      }
+    } catch (error) {}
+
+    try {
+      if (payload instanceof ArrayBuffer) {
+        const text = new TextDecoder('utf-8').decode(payload);
+        inspectNetworkText(text, meta);
+      }
+    } catch (error) {}
+  }
+
   function ensureNetworkTimerHook() {
     if (state.networkHookInstalled) return;
     state.networkHookInstalled = true;
@@ -993,7 +1016,7 @@
               if (shouldInspectNetworkUrl(url) && response?.clone) {
                 const clone = response.clone();
                 clone.text().then((text) => {
-                  inspectNetworkText(text, { source: 'fetch', url });
+                  inspectNetworkPayload(text, { source: 'fetch', url });
                 }).catch(() => {});
               }
             } catch (error) {}
@@ -1023,7 +1046,7 @@
                 const url = String(this.__rzpRespRadarUrl || this.responseURL || '');
                 if (!shouldInspectNetworkUrl(url)) return;
                 if (typeof this.responseText !== 'string') return;
-                inspectNetworkText(this.responseText, { source: 'xhr', url });
+                inspectNetworkPayload(this.responseText, { source: 'xhr', url });
               } catch (error) {}
             });
           } catch (error) {}
@@ -1043,8 +1066,7 @@
             socket.addEventListener('message', (event) => {
               try {
                 state.networkMeta.messageCount = (state.networkMeta.messageCount || 0) + 1;
-                if (typeof event?.data !== 'string') return;
-                inspectNetworkText(event.data, { source: 'ws', url: wsUrl });
+                inspectNetworkPayload(event?.data, { source: 'ws', url: wsUrl });
               } catch (error) {}
             });
           } catch (error) {}
@@ -1064,10 +1086,8 @@
             try {
               if (event?.type === 'message') {
                 state.networkMeta.messageCount = (state.networkMeta.messageCount || 0) + 1;
-                if (typeof event?.data === 'string') {
-                  const url = String(this?.url || '');
-                  inspectNetworkText(event.data, { source: 'ws-dispatch', url });
-                }
+                const url = String(this?.url || '');
+                inspectNetworkPayload(event?.data, { source: 'ws-dispatch', url });
               }
             } catch (error) {}
             return nativeDispatchEvent.call(this, event);
@@ -1126,6 +1146,11 @@
                 diagnostics.normalizedTimers += 1;
               }
             });
+          });
+
+          diagnostics.normalizedTimers += extractTimersFromObjectGraph(root, now, parsedTimers, {
+            maxDepth: 5,
+            maxNodes: 4000
           });
         }
       }
@@ -1588,7 +1613,8 @@
         timerCount: state.networkMeta.timerCount,
         hasActiveTimers: state.networkMeta.hasActiveTimers,
         arraysFound: state.networkMeta.arraysFound || 0,
-        normalizedTimers: state.networkMeta.normalizedTimers || 0
+        normalizedTimers: state.networkMeta.normalizedTimers || 0,
+        messageCount: state.networkMeta.messageCount || 0
       };
       state.diagnostics.runtime = runtimeResult.diagnostics;
       state.diagnostics.hasActiveNetworkTimers = hasActiveNetworkTimers;
