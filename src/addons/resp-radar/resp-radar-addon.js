@@ -1004,6 +1004,12 @@
 
     if (candidatePositive && !existingPositive) return candidate;
     if (!candidatePositive && existingPositive) return existing;
+
+    // Prefer fresher payloads when quality is otherwise equal.
+    const existingCapturedAt = Number(existing._capturedAtMs || 0);
+    const candidateCapturedAt = Number(candidate._capturedAtMs || 0);
+    if (candidateCapturedAt > existingCapturedAt + 1000) return candidate;
+
     if (candidatePositive && existingPositive && candidateRemaining < existingRemaining) return candidate;
 
     return existing;
