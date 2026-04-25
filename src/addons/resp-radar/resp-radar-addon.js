@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-network-v1';
+  const ADDON_BUILD = '2026-04-25-network-v2';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 30000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
@@ -124,6 +124,20 @@
     'Sala Zrujnowanej Świątyni': 'Barbatos Smoczy Strażnik',
     'Sala Tronowa': 'Tanroth'
   };
+
+  const KNOWN_TITAN_NAMES = new Set(
+    Object.values(TITAN_DATA)
+      .flatMap((value) => String(value).split('/'))
+      .map((name) => name.trim())
+      .filter(Boolean)
+  );
+
+  const KNOWN_ELITE2_NAMES = new Set(
+    Object.values(ELITE_II_DATA)
+      .flatMap((value) => String(value).split('/'))
+      .map((name) => name.trim())
+      .filter(Boolean)
+  );
 
   const state = {
     enabled: false,
@@ -479,8 +493,18 @@
   function normalizeNpcType(rawType) {
     if (!rawType || typeof rawType !== 'string') return null;
     const type = rawType.toUpperCase();
+    if (type === 'T') return 'TITAN';
+    if (type === 'E2' || type === 'EII') return 'ELITE2';
     if (type.includes('ELITE2')) return 'ELITE2';
     if (type.includes('TITAN')) return 'TITAN';
+    return null;
+  }
+
+  function inferNpcTypeByName(name) {
+    const normalized = String(name || '').trim();
+    if (!normalized) return null;
+    if (KNOWN_TITAN_NAMES.has(normalized)) return 'TITAN';
+    if (KNOWN_ELITE2_NAMES.has(normalized)) return 'ELITE2';
     return null;
   }
 
@@ -619,7 +643,7 @@
     return arrays;
   }
 
-  function normalizeTimerEntry(timer, now) {
+  function normalizeTimerEntry(timer, now, fallbackName) {
     if (!timer || typeof timer !== 'object') return null;
 
     const npc = timer.npc || timer.mob || timer.monster || timer.entity || {};
@@ -628,14 +652,18 @@
     );
     const name =
       npc.name || timer.name || timer.npcName || timer.mobName || timer.entityName || null;
+    const resolvedName = name || fallbackName || null;
+    const resolvedType = type || inferNpcTypeByName(resolvedName);
 
-    if (!type || !name) return null;
+    if (!resolvedType || !resolvedName) return null;
 
     const minRaw =
       timer.minSpawnTime ??
       timer.minRespawnTime ??
       timer.minRespTime ??
       timer.minTime ??
+      timer.minTimestamp ??
+      timer.startTime ??
       timer.respawnFrom ??
       timer.nextSpawnFrom;
     const maxRaw =
@@ -643,6 +671,9 @@
       timer.maxRespawnTime ??
       timer.maxRespTime ??
       timer.maxTime ??
+      timer.respawnAt ??
+      timer.nextRespawn ??
+      timer.timestamp ??
       timer.respawnTo ??
       timer.spawnTime ??
       timer.nextSpawnTime ??
@@ -656,6 +687,8 @@
       timer.secondsLeft ??
       timer.maxRemainingSeconds ??
       timer.countdown ??
+      timer.respawnIn ??
+      timer.timeToRespawn ??
       timer.timeToSpawn ??
       timer.time;
 
@@ -685,8 +718,8 @@
     if (maxTime === null) return null;
 
     return {
-      name,
-      type,
+      name: resolvedName,
+      type: resolvedType,
       minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
       remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
       _debug: {
@@ -703,6 +736,54 @@
         timer.author?.name ||
         null
     };
+  }
+
+  function parseHmsToSeconds(value) {
+    if (typeof value !== 'string') return null;
+    const match = value.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3]);
+    if (![hours, minutes, seconds].every(Number.isFinite)) return null;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  function normalizeNamedTimerValue(name, value, now) {
+    const inferredType = inferNpcTypeByName(name);
+    if (!inferredType) return null;
+
+    if (typeof value === 'string') {
+      const hmsSeconds = parseHmsToSeconds(value);
+      if (hmsSeconds !== null) {
+        return {
+          name,
+          type: inferredType,
+          minRemainingSeconds: Math.max(0, hmsSeconds),
+          remainingSeconds: Math.max(0, hmsSeconds),
+          addedByName: null
+        };
+      }
+      return null;
+    }
+
+    if (typeof value === 'number') {
+      const seconds = toSeconds(value);
+      if (seconds === null) return null;
+      return {
+        name,
+        type: inferredType,
+        minRemainingSeconds: Math.max(0, seconds),
+        remainingSeconds: Math.max(0, seconds),
+        addedByName: null
+      };
+    }
+
+    if (value && typeof value === 'object') {
+      return normalizeTimerEntry(value, now, name);
+    }
+
+    return null;
   }
 
   function getTimerQualityScore(timer) {
@@ -850,6 +931,33 @@
           } catch (error) {}
           return originalSend.apply(this, args);
         };
+      }
+    } catch (error) {}
+
+    try {
+      if (typeof window.WebSocket === 'function' && !window.WebSocket.__rzpRespRadarWrapped) {
+        const NativeWebSocket = window.WebSocket;
+        const WrappedWebSocket = function (...args) {
+          const socket = new NativeWebSocket(...args);
+          try {
+            const wsUrl = String(args?.[0] || '');
+            socket.addEventListener('message', (event) => {
+              try {
+                if (typeof event?.data !== 'string') return;
+                inspectNetworkText(event.data, { source: 'ws', url: wsUrl });
+              } catch (error) {}
+            });
+          } catch (error) {}
+          return socket;
+        };
+
+        WrappedWebSocket.prototype = NativeWebSocket.prototype;
+        WrappedWebSocket.CONNECTING = NativeWebSocket.CONNECTING;
+        WrappedWebSocket.OPEN = NativeWebSocket.OPEN;
+        WrappedWebSocket.CLOSING = NativeWebSocket.CLOSING;
+        WrappedWebSocket.CLOSED = NativeWebSocket.CLOSED;
+        WrappedWebSocket.__rzpRespRadarWrapped = true;
+        window.WebSocket = WrappedWebSocket;
       }
     } catch (error) {}
   }
@@ -1011,6 +1119,27 @@
             diagnostics.normalizedTimers += 1;
           }
         });
+      });
+
+      let entries = [];
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        try {
+          entries = Object.entries(value);
+        } catch (error) {
+          entries = [];
+        }
+      }
+
+      entries.forEach(([key, child]) => {
+        const direct = normalizeNamedTimerValue(key, child, now);
+        if (!direct) return;
+
+        const existing = parsedTimers[direct.name];
+        const picked = pickBetterTimer(existing, direct);
+        if (picked !== existing) {
+          parsedTimers[direct.name] = picked;
+          diagnostics.normalizedTimers += 1;
+        }
       });
     });
 
