@@ -8,6 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
+  const ADDON_BUILD = '2026-04-25-diagnostics-v2';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 30000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
   const RUNTIME_SCAN_MAX_NODES = 12000;
@@ -142,6 +143,7 @@
     lastAllKeysFallbackAt: 0,
     lastRuntimeScanAt: 0,
     diagnostics: {
+      build: ADDON_BUILD,
       source: 'none',
       storage: null,
       runtime: null,
@@ -1053,10 +1055,13 @@
   }
 
   function fetchLootlogTimers() {
+    let lastStorageTimers = null;
+
     try {
       const world = getWorld();
       const storageResult = parseTimersFromLootlogStorage(world);
       const fromStorage = storageResult.timers || {};
+      lastStorageTimers = fromStorage;
       const storageTimerCount = Object.keys(fromStorage).length;
       const hasActiveStorageTimers = hasActiveTimers(fromStorage);
 
@@ -1122,8 +1127,13 @@
       logTimerDiagnostics(storageResult.diagnostics, storageTimerCount, domResult.diagnostics, domTimerCount, domTimerCount ? 'dom' : 'none');
     } catch (error) {
       debugError('fetchLootlogTimers failed:', error);
-      state.lootlogTimers = {};
-      state.diagnostics.source = 'error';
+      if (lastStorageTimers && Object.keys(lastStorageTimers).length) {
+        state.lootlogTimers = lastStorageTimers;
+        state.diagnostics.source = 'storage-fallback-after-error';
+      } else {
+        state.lootlogTimers = {};
+        state.diagnostics.source = 'error';
+      }
       state.diagnostics.fetchError = String(error?.message || error || 'unknown-fetch-error');
     }
   }
