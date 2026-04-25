@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-message-phases-v1';
+  const ADDON_BUILD = '2026-04-25-message-phases-v2';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
@@ -2097,7 +2097,7 @@
         <span style="color:${nameColor};font-weight:700;">${npcName}</span>
         <span style="opacity:.65;"> - </span>
         <span>respi jeszcze przez</span>
-        <span style="color:#86efac;font-weight:700;">${formatTime(liveRemainingSeconds)}</span>
+        <span style="color:#fb923c;font-weight:700;">${formatTime(liveRemainingSeconds)}</span>
       `;
     } else if (timerExpired) {
       node.innerHTML = `

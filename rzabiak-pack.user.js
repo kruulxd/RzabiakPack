@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         RzabiakPack - Panel Dodatkow
 // @namespace    https://margonem.pl/
-// @version      1.2.16
+// @version      1.2.17
 // @description  Loader panelu RzabiakPack
 // @author       kruulxd
 // @match        *://*.margonem.pl/*
