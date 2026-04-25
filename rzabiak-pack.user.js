@@ -1,10 +1,11 @@
 ﻿// ==UserScript==
 // @name         RzabiakPack - Panel Dodatkow
 // @namespace    https://margonem.pl/
-// @version      1.2.1
+// @version      1.2.2
 // @description  Loader panelu RzabiakPack
 // @author       kruulxd
 // @match        *://*.margonem.pl/*
+// @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @connect      raw.githubusercontent.com
 // @downloadURL  https://raw.githubusercontent.com/kruulxd/RzabiakPack/main/rzabiak-pack.user.js
@@ -20,6 +21,20 @@
     return;
   }
   window.__RZP_PANEL_LOADER_DONE = true;
+
+  // Globalnie wycisza logi konsoli na stronie gry.
+  (function silenceConsole() {
+    try {
+      const noop = function () {};
+      const target = unsafeWindow?.console || window.console;
+      if (!target) return;
+      target.log = noop;
+      target.warn = noop;
+      target.error = noop;
+      target.info = noop;
+      target.debug = noop;
+    } catch (error) {}
+  })();
 
   // Udostępnij loader omijający CSP dla panel-core.js
   unsafeWindow.__RZP_LOAD_MODULE = function (url, onload, onerror) {
@@ -51,10 +66,7 @@
       script.textContent = response.responseText;
       document.documentElement.appendChild(script);
       script.remove();
-      console.log('RzabiakPack core loaded');
     },
-    onerror: function () {
-      console.error('RzabiakPack core failed to load');
-    }
+    onerror: function () {}
   });
 })();
