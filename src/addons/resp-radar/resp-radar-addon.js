@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-fast-path-v1';
+  const ADDON_BUILD = '2026-04-25-message-phases-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
@@ -747,6 +747,7 @@
       minRemainingSeconds,
       remainingSeconds,
       _capturedAtMs: now,
+      _minRemainingAtCapture: minRemainingSeconds,
       _remainingAtCapture: remainingSeconds,
       _debug: {
         minRaw,
@@ -788,6 +789,7 @@
           minRemainingSeconds: Math.max(0, hmsSeconds),
           remainingSeconds: Math.max(0, hmsSeconds),
           _capturedAtMs: now,
+          _minRemainingAtCapture: Math.max(0, hmsSeconds),
           _remainingAtCapture: Math.max(0, hmsSeconds),
           addedByName: null
         };
@@ -804,6 +806,7 @@
         minRemainingSeconds: Math.max(0, seconds),
         remainingSeconds: Math.max(0, seconds),
         _capturedAtMs: now,
+        _minRemainingAtCapture: Math.max(0, seconds),
         _remainingAtCapture: Math.max(0, seconds),
         addedByName: null
       };
@@ -2039,6 +2042,27 @@
     return Math.max(0, Math.floor(fallback));
   }
 
+  function getLiveMinRemainingSeconds(timer) {
+    if (!timer) return null;
+
+    const now = Date.now();
+    const parsedMinTime = Number(timer?._debug?.parsedMinTime);
+    if (Number.isFinite(parsedMinTime) && parsedMinTime > 0) {
+      return Math.max(0, Math.floor((parsedMinTime - now) / 1000));
+    }
+
+    const capturedAt = Number(timer?._capturedAtMs);
+    const minRemainingAtCapture = Number(timer?._minRemainingAtCapture);
+    if (Number.isFinite(capturedAt) && Number.isFinite(minRemainingAtCapture)) {
+      const elapsedSeconds = Math.max(0, Math.floor((now - capturedAt) / 1000));
+      return Math.max(0, Math.floor(minRemainingAtCapture - elapsedSeconds));
+    }
+
+    const fallback = Number(timer.minRemainingSeconds);
+    if (!Number.isFinite(fallback)) return null;
+    return Math.max(0, Math.floor(fallback));
+  }
+
   function removeToasts() {
     document.querySelectorAll(`.${TOAST_CLASS}`).forEach((node) => node.remove());
   }
@@ -2054,16 +2078,25 @@
 
     const nameColor = npcType === 'TITAN' ? '#f87171' : '#fb7185';
 
+    const liveMinRemainingSeconds = getLiveMinRemainingSeconds(timer);
     const liveRemainingSeconds = getLiveRemainingSeconds(timer);
     const hasTimer = Number.isFinite(liveRemainingSeconds);
+    const inCooldown = hasTimer && Number.isFinite(liveMinRemainingSeconds) && liveMinRemainingSeconds > 0;
+    const inRespWindow = hasTimer && liveRemainingSeconds > 0 && !inCooldown;
     const timerExpired = hasTimer && liveRemainingSeconds <= 0;
-    const timerActive = hasTimer && liveRemainingSeconds > 0;
 
-    if (timerActive) {
+    if (inCooldown) {
       node.innerHTML = `
         <span style="color:${nameColor};font-weight:700;">${npcName}</span>
         <span style="opacity:.65;"> - </span>
-        <span>respi za</span>
+        <span>zaczyna respić za</span>
+        <span style="color:#86efac;font-weight:700;">${formatTime(liveMinRemainingSeconds)}</span>
+      `;
+    } else if (inRespWindow) {
+      node.innerHTML = `
+        <span style="color:${nameColor};font-weight:700;">${npcName}</span>
+        <span style="opacity:.65;"> - </span>
+        <span>respi jeszcze przez</span>
         <span style="color:#86efac;font-weight:700;">${formatTime(liveRemainingSeconds)}</span>
       `;
     } else if (timerExpired) {
