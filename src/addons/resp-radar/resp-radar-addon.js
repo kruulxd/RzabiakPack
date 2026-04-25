@@ -1328,6 +1328,42 @@
     return result;
   }
 
+  function getMinuteWindowTimerForNpc(npcName) {
+    const normalizedNpc = normalizeNpcName(npcName);
+    if (!normalizedNpc) return null;
+
+    const rows = document.querySelectorAll('.elite-timer-wnd .npc-list .row');
+    if (!rows.length) return null;
+
+    for (const row of rows) {
+      try {
+        const rawName = row.querySelector('.name-val')?.textContent || '';
+        const rawTime = row.querySelector('.time-val')?.textContent || '';
+        const rowNpc = normalizeMinuteWindowNpcName(rawName);
+        if (!rowNpc || rowNpc !== normalizedNpc) continue;
+
+        const seconds = parseHmsToSeconds(String(rawTime).trim());
+        if (!Number.isFinite(seconds)) return null;
+
+        return {
+          name: npcName,
+          type: inferNpcTypeByName(npcName) || 'ELITE2',
+          minRemainingSeconds: Math.max(0, seconds),
+          remainingSeconds: Math.max(0, seconds),
+          _capturedAtMs: Date.now(),
+          _minRemainingAtCapture: Math.max(0, seconds),
+          _remainingAtCapture: Math.max(0, seconds),
+          addedByName: null,
+          _debug: {
+            source: 'minute-window-dom-fallback'
+          }
+        };
+      } catch (error) {}
+    }
+
+    return null;
+  }
+
   function shouldTriggerFromMinuteWindowSnapshot(currentSnapshot, trackedNpcNames) {
     const previousSnapshot = state.minuteWindowSnapshot || {};
 
@@ -2562,7 +2598,8 @@
     const npcDebugRows = [];
 
     npcNames.forEach((npcName, index) => {
-      const timer = getTimerForNpcName(npcName, state.lootlogTimers);
+      const timerFromState = getTimerForNpcName(npcName, state.lootlogTimers);
+      const timer = timerFromState || getMinuteWindowTimerForNpc(npcName);
 
       if (timer) matchedCount += 1;
 
