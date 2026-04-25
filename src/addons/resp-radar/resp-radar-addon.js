@@ -8,6 +8,10 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
+  const ALL_KEYS_FALLBACK_COOLDOWN_MS = 30000;
+  const RUNTIME_SCAN_COOLDOWN_MS = 5000;
+  const RUNTIME_SCAN_MAX_NODES = 12000;
+  const RUNTIME_SCAN_MAX_DEPTH = 8;
 
   const DEFAULT_SETTINGS = {
     position: 'bottom-center',
@@ -134,6 +138,19 @@
       lastSummaryHash: '',
       lastRefreshLogAt: 0,
       lastRefreshLogHash: ''
+    },
+    lastAllKeysFallbackAt: 0,
+    lastRuntimeScanAt: 0,
+    diagnostics: {
+      source: 'none',
+      storage: null,
+      runtime: null,
+      dom: null,
+      hasActiveStorageTimers: false,
+      hasActiveRuntimeTimers: false,
+      storageTimerCount: 0,
+      runtimeTimerCount: 0,
+      domTimerCount: 0
     }
   };
 
@@ -687,6 +704,11 @@
     return existing;
   }
 
+  function hasActiveTimers(timers) {
+    if (!timers || typeof timers !== 'object') return false;
+    return Object.values(timers).some((timer) => Number(timer?.remainingSeconds) > 0);
+  }
+
   function parseTimersFromLootlogStorage(world) {
     const now = Date.now();
     const parsedTimers = {};
@@ -699,6 +721,8 @@
       arraysFound: 0,
       normalizedTimers: 0,
       usedFallbackAllKeys: false,
+      fallbackReason: null,
+      skippedFallbackByCooldown: false,
       scannedKeys: entries.map(([key]) => key)
     };
 
@@ -740,14 +764,184 @@
 
     parseFromEntries(entries);
 
-    // Fallback for new Lootlog versions that persist under generic keys.
-    if (!Object.keys(parsedTimers).length) {
+    const noTimers = !Object.keys(parsedTimers).length;
+    const noActiveTimers = !hasActiveTimers(parsedTimers);
+    const shouldUseFallbackAllKeys = noTimers || noActiveTimers;
+    const nowTs = Date.now();
+    const cooldownPassed = nowTs - state.lastAllKeysFallbackAt >= ALL_KEYS_FALLBACK_COOLDOWN_MS;
+
+    // Fallback for new Lootlog versions that persist under generic keys,
+    // and also when filtered keys only contain stale/expired timers.
+    if (shouldUseFallbackAllKeys && cooldownPassed) {
       const allEntries = getLootlogStorageEntries(true);
       diagnostics.usedFallbackAllKeys = true;
+      diagnostics.fallbackReason = noTimers ? 'no-timers' : 'only-expired-timers';
       diagnostics.allEntryCount = allEntries.length;
       diagnostics.scannedKeys = allEntries.map(([key]) => key);
+      state.lastAllKeysFallbackAt = nowTs;
       parseFromEntries(allEntries);
+    } else if (shouldUseFallbackAllKeys) {
+      diagnostics.skippedFallbackByCooldown = true;
     }
+
+    return { timers: parsedTimers, diagnostics };
+  }
+
+  function shouldTraverseProperty(parentKey, key) {
+    if (!key) return false;
+    const lower = String(key).toLowerCase();
+    if (
+      lower.includes('lootlog') ||
+      lower.includes('guild') ||
+      lower.includes('timer') ||
+      lower.includes('query') ||
+      lower.includes('cache') ||
+      lower.includes('persist') ||
+      lower.includes('react') ||
+      lower.includes('state') ||
+      lower.includes('client') ||
+      lower.includes('store') ||
+      lower.includes('engine')
+    ) {
+      return true;
+    }
+    if (!parentKey) return false;
+    return shouldTraverseProperty('', parentKey);
+  }
+
+  function collectRuntimeRoots() {
+    const roots = [];
+    const w = window;
+
+    const pushRoot = (label, value) => {
+      if (!value || (typeof value !== 'object' && typeof value !== 'function')) return;
+      roots.push({ label, value });
+    };
+
+    pushRoot('window.Engine', w.Engine);
+    pushRoot('window.g', w.g);
+    pushRoot('window.__NEXT_DATA__', w.__NEXT_DATA__);
+    pushRoot('window.__NUXT__', w.__NUXT__);
+    pushRoot('window.__APOLLO_STATE__', w.__APOLLO_STATE__);
+    pushRoot('window.__REACT_QUERY_STATE__', w.__REACT_QUERY_STATE__);
+
+    try {
+      Object.keys(w).forEach((key) => {
+        if (!shouldTraverseProperty('', key)) return;
+        let value = null;
+        try {
+          value = w[key];
+        } catch (error) {
+          return;
+        }
+        pushRoot(`window.${key}`, value);
+      });
+    } catch (error) {}
+
+    return roots;
+  }
+
+  function parseTimersFromRuntimeMemory(world) {
+    const now = Date.now();
+    if (now - state.lastRuntimeScanAt < RUNTIME_SCAN_COOLDOWN_MS) {
+      return {
+        timers: {},
+        diagnostics: {
+          world,
+          skippedByCooldown: true,
+          rootsScanned: 0,
+          nodesVisited: 0,
+          arraysFound: 0,
+          normalizedTimers: 0,
+          rootLabels: []
+        }
+      };
+    }
+
+    state.lastRuntimeScanAt = now;
+
+    const parsedTimers = {};
+    const diagnostics = {
+      world,
+      skippedByCooldown: false,
+      rootsScanned: 0,
+      nodesVisited: 0,
+      arraysFound: 0,
+      normalizedTimers: 0,
+      rootLabels: []
+    };
+
+    const roots = collectRuntimeRoots();
+    const seen = new WeakSet();
+
+    const maybeParseNode = (node) => {
+      if (!node || typeof node !== 'object') return;
+
+      const timerArrays = collectGuildTimerArrays(node, world);
+      if (!Array.isArray(timerArrays) || !timerArrays.length) return;
+
+      diagnostics.arraysFound += timerArrays.length;
+      timerArrays.forEach((timers) => {
+        timers.forEach((timer) => {
+          const normalized = normalizeTimerEntry(timer, now);
+          if (!normalized) return;
+
+          const existing = parsedTimers[normalized.name];
+          const picked = pickBetterTimer(existing, normalized);
+          if (picked !== existing) {
+            parsedTimers[normalized.name] = picked;
+            diagnostics.normalizedTimers += 1;
+          }
+        });
+      });
+    };
+
+    const traverse = (node, depth, parentKey) => {
+      if (!node || typeof node !== 'object') return;
+      if (seen.has(node)) return;
+      if (diagnostics.nodesVisited >= RUNTIME_SCAN_MAX_NODES) return;
+      if (depth > RUNTIME_SCAN_MAX_DEPTH) return;
+
+      seen.add(node);
+      diagnostics.nodesVisited += 1;
+
+      maybeParseNode(node);
+
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          traverse(node[i], depth + 1, parentKey);
+          if (diagnostics.nodesVisited >= RUNTIME_SCAN_MAX_NODES) return;
+        }
+        return;
+      }
+
+      let keys;
+      try {
+        keys = Object.keys(node);
+      } catch (error) {
+        return;
+      }
+
+      for (const key of keys) {
+        if (!shouldTraverseProperty(parentKey, key)) continue;
+        let child;
+        try {
+          child = node[key];
+        } catch (error) {
+          continue;
+        }
+        traverse(child, depth + 1, key);
+        if (diagnostics.nodesVisited >= RUNTIME_SCAN_MAX_NODES) return;
+      }
+    };
+
+    roots.forEach((root) => {
+      if (diagnostics.nodesVisited >= RUNTIME_SCAN_MAX_NODES) return;
+      diagnostics.rootsScanned += 1;
+      diagnostics.rootLabels.push(root.label);
+      maybeParseNode(root.value);
+      traverse(root.value, 0, root.label);
+    });
 
     return { timers: parsedTimers, diagnostics };
   }
@@ -847,9 +1041,38 @@
       const storageResult = parseTimersFromLootlogStorage(world);
       const fromStorage = storageResult.timers || {};
       const storageTimerCount = Object.keys(fromStorage).length;
+      const hasActiveStorageTimers = hasActiveTimers(fromStorage);
+
+      const runtimeResult = parseTimersFromRuntimeMemory(world);
+      const fromRuntime = runtimeResult.timers || {};
+      const runtimeTimerCount = Object.keys(fromRuntime).length;
+      const hasActiveRuntimeTimers = hasActiveTimers(fromRuntime);
+
+      state.diagnostics.storage = storageResult.diagnostics;
+      state.diagnostics.runtime = runtimeResult.diagnostics;
+      state.diagnostics.hasActiveStorageTimers = hasActiveStorageTimers;
+      state.diagnostics.hasActiveRuntimeTimers = hasActiveRuntimeTimers;
+      state.diagnostics.storageTimerCount = storageTimerCount;
+      state.diagnostics.runtimeTimerCount = runtimeTimerCount;
+
+      const preferRuntime =
+        runtimeTimerCount > 0 &&
+        (hasActiveRuntimeTimers && !hasActiveStorageTimers || storageTimerCount === 0);
+
+      if (preferRuntime) {
+        state.lootlogTimers = fromRuntime;
+        state.diagnostics.source = 'runtime';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
+        logTimerDiagnostics(runtimeResult.diagnostics, runtimeTimerCount, null, 0, 'runtime');
+        return;
+      }
 
       if (storageTimerCount) {
         state.lootlogTimers = fromStorage;
+        state.diagnostics.source = 'storage';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
         logTimerDiagnostics(storageResult.diagnostics, storageTimerCount, null, 0, 'storage');
         return;
       }
@@ -858,10 +1081,14 @@
       const fromDom = domResult.timers || {};
       const domTimerCount = Object.keys(fromDom).length;
       state.lootlogTimers = fromDom;
+      state.diagnostics.source = domTimerCount ? 'dom' : 'none';
+      state.diagnostics.dom = domResult.diagnostics;
+      state.diagnostics.domTimerCount = domTimerCount;
       logTimerDiagnostics(storageResult.diagnostics, storageTimerCount, domResult.diagnostics, domTimerCount, domTimerCount ? 'dom' : 'none');
     } catch (error) {
       debugError('fetchLootlogTimers failed:', error);
       state.lootlogTimers = {};
+      state.diagnostics.source = 'error';
     }
   }
 
