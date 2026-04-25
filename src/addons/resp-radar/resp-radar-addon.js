@@ -1145,7 +1145,8 @@
       normalizedTimers: 0,
       usedMethods: [],
       pendingPromiseMethods: [],
-      candidateKeys: []
+      candidateKeys: [],
+      rawResults: []
     };
 
     const api = window.lootlogGameClientApi;
@@ -1182,6 +1183,22 @@
       try {
         const result = fn.call(api);
         diagnostics.usedMethods.push(name);
+        diagnostics.rawResults.push({
+          method: name,
+          isPromise: Boolean(result && typeof result.then === 'function'),
+          type: Array.isArray(result) ? 'array' : typeof result,
+          keySample:
+            result && typeof result === 'object' && !Array.isArray(result)
+              ? Object.keys(result).slice(0, 20)
+              : [],
+          arrayLength: Array.isArray(result) ? result.length : null,
+          sample:
+            Array.isArray(result)
+              ? result.slice(0, 3)
+              : result && typeof result === 'object'
+                ? Object.fromEntries(Object.entries(result).slice(0, 5))
+                : result ?? null
+        });
         if (result && typeof result.then === 'function') {
           diagnostics.pendingPromiseMethods.push(name);
           result.then((resolved) => {
