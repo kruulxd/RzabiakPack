@@ -556,7 +556,11 @@
         if (isTimerLikeArray(node)) {
           arrays.push(node);
         }
-        node.forEach(visit);
+        for (let i = 0; i < node.length; i++) {
+          try {
+            visit(node[i]);
+          } catch (error) {}
+        }
         return;
       }
 
@@ -578,10 +582,23 @@
         if (parsedClientState) visit(parsedClientState);
       }
 
-      Object.values(node).forEach(visit);
+      let values = [];
+      try {
+        values = Object.values(node);
+      } catch (error) {
+        values = [];
+      }
+
+      for (let i = 0; i < values.length; i++) {
+        try {
+          visit(values[i]);
+        } catch (error) {}
+      }
     }
 
-    visit(root);
+    try {
+      visit(root);
+    } catch (error) {}
     return arrays;
   }
 
@@ -1043,7 +1060,25 @@
       const storageTimerCount = Object.keys(fromStorage).length;
       const hasActiveStorageTimers = hasActiveTimers(fromStorage);
 
-      const runtimeResult = parseTimersFromRuntimeMemory(world);
+      let runtimeResult;
+      try {
+        runtimeResult = parseTimersFromRuntimeMemory(world);
+      } catch (runtimeError) {
+        runtimeResult = {
+          timers: {},
+          diagnostics: {
+            world,
+            skippedByCooldown: false,
+            rootsScanned: 0,
+            nodesVisited: 0,
+            arraysFound: 0,
+            normalizedTimers: 0,
+            rootLabels: [],
+            runtimeError: String(runtimeError?.message || runtimeError || 'unknown-runtime-error')
+          }
+        };
+      }
+
       const fromRuntime = runtimeResult.timers || {};
       const runtimeTimerCount = Object.keys(fromRuntime).length;
       const hasActiveRuntimeTimers = hasActiveTimers(fromRuntime);
@@ -1089,6 +1124,7 @@
       debugError('fetchLootlogTimers failed:', error);
       state.lootlogTimers = {};
       state.diagnostics.source = 'error';
+      state.diagnostics.fetchError = String(error?.message || error || 'unknown-fetch-error');
     }
   }
 
