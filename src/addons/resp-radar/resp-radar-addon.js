@@ -146,10 +146,13 @@
       build: ADDON_BUILD,
       source: 'none',
       storage: null,
+      api: null,
       runtime: null,
       dom: null,
+      hasActiveApiTimers: false,
       hasActiveStorageTimers: false,
       hasActiveRuntimeTimers: false,
+      apiTimerCount: 0,
       storageTimerCount: 0,
       runtimeTimerCount: 0,
       domTimerCount: 0
@@ -806,6 +809,91 @@
     return { timers: parsedTimers, diagnostics };
   }
 
+  function parseTimersFromLootlogApi(world) {
+    const diagnostics = {
+      world,
+      apiFound: false,
+      rootsTried: 0,
+      arraysFound: 0,
+      normalizedTimers: 0,
+      usedMethods: [],
+      candidateKeys: []
+    };
+
+    const api = window.lootlogGameClientApi;
+    if (!api || typeof api !== 'object') {
+      return { timers: {}, diagnostics };
+    }
+
+    diagnostics.apiFound = true;
+    const now = Date.now();
+    const parsedTimers = {};
+    const roots = [];
+
+    const addRoot = (value, label) => {
+      if (!value) return;
+      if (typeof value !== 'object' && !Array.isArray(value)) return;
+      roots.push({ value, label });
+    };
+
+    addRoot(api, 'api');
+
+    const methodNames = [
+      'getState',
+      'getStore',
+      'getData',
+      'getSnapshot',
+      'getTimers',
+      'getGuildTimers',
+      'getQueryClient'
+    ];
+
+    methodNames.forEach((name) => {
+      const fn = api[name];
+      if (typeof fn !== 'function') return;
+      try {
+        const result = fn.call(api);
+        diagnostics.usedMethods.push(name);
+        addRoot(result, `api.${name}()`);
+      } catch (error) {}
+    });
+
+    let keys = [];
+    try {
+      keys = Object.keys(api);
+    } catch (error) {
+      keys = [];
+    }
+
+    keys.forEach((key) => {
+      if (!/timer|guild|loot|spawn|resp|query|cache|state/i.test(key)) return;
+      diagnostics.candidateKeys.push(key);
+      try {
+        addRoot(api[key], `api.${key}`);
+      } catch (error) {}
+    });
+
+    roots.forEach(({ value }) => {
+      diagnostics.rootsTried += 1;
+      const arrays = collectGuildTimerArrays(value, world);
+      diagnostics.arraysFound += arrays.length;
+      arrays.forEach((timers) => {
+        timers.forEach((timer) => {
+          const normalized = normalizeTimerEntry(timer, now);
+          if (!normalized) return;
+          const existing = parsedTimers[normalized.name];
+          const picked = pickBetterTimer(existing, normalized);
+          if (picked !== existing) {
+            parsedTimers[normalized.name] = picked;
+            diagnostics.normalizedTimers += 1;
+          }
+        });
+      });
+    });
+
+    return { timers: parsedTimers, diagnostics };
+  }
+
   function shouldTraverseProperty(parentKey, key) {
     if (!key) return false;
     const lower = String(key).toLowerCase();
@@ -1065,6 +1153,11 @@
       const storageTimerCount = Object.keys(fromStorage).length;
       const hasActiveStorageTimers = hasActiveTimers(fromStorage);
 
+      const apiResult = parseTimersFromLootlogApi(world);
+      const fromApi = apiResult.timers || {};
+      const apiTimerCount = Object.keys(fromApi).length;
+      const hasActiveApiTimers = hasActiveTimers(fromApi);
+
       let runtimeResult;
       try {
         runtimeResult = parseTimersFromRuntimeMemory(world);
@@ -1089,11 +1182,27 @@
       const hasActiveRuntimeTimers = hasActiveTimers(fromRuntime);
 
       state.diagnostics.storage = storageResult.diagnostics;
+      state.diagnostics.api = apiResult.diagnostics;
       state.diagnostics.runtime = runtimeResult.diagnostics;
+      state.diagnostics.hasActiveApiTimers = hasActiveApiTimers;
       state.diagnostics.hasActiveStorageTimers = hasActiveStorageTimers;
       state.diagnostics.hasActiveRuntimeTimers = hasActiveRuntimeTimers;
+      state.diagnostics.apiTimerCount = apiTimerCount;
       state.diagnostics.storageTimerCount = storageTimerCount;
       state.diagnostics.runtimeTimerCount = runtimeTimerCount;
+
+      const preferApi =
+        apiTimerCount > 0 &&
+        (hasActiveApiTimers || (!hasActiveStorageTimers && !hasActiveRuntimeTimers));
+
+      if (preferApi) {
+        state.lootlogTimers = fromApi;
+        state.diagnostics.source = 'api';
+        state.diagnostics.dom = null;
+        state.diagnostics.domTimerCount = 0;
+        logTimerDiagnostics(apiResult.diagnostics, apiTimerCount, null, 0, 'api');
+        return;
+      }
 
       const preferRuntime =
         runtimeTimerCount > 0 &&
