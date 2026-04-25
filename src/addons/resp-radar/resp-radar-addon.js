@@ -11,9 +11,13 @@
   const ADDON_BUILD = '2026-04-25-message-phases-v2';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
+  const STARTUP_WARMUP_MS = 20000;
+  const STARTUP_MIN_REFRESH_MS = 1000;
+  const STARTUP_POLL_COOLDOWN_MS = 1500;
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
   const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
   const UI_REFRESH_INTERVAL_MS = 1000;
+  const BATTLE_TRIGGER_COOLDOWN_MS = 5000;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -184,7 +188,12 @@
     lastRuntimeScanAt: 0,
     lastDataRefreshAt: 0,
     lastNetworkPollAt: 0,
+    warmupUntil: 0,
     lastNetworkPollStatus: 'idle',
+    battleLogObserverBound: false,
+    battleLogObserver: null,
+    lastBattleLogTriggerAt: 0,
+    battleRefreshTimeoutIds: [],
     networkHookInstalled: false,
     apiTimersCache: {},
     apiMeta: {
@@ -1226,6 +1235,154 @@
     } catch (error) {}
   }
 
+  function clearBattleRefreshTimeouts() {
+    if (!Array.isArray(state.battleRefreshTimeoutIds)) {
+      state.battleRefreshTimeoutIds = [];
+      return;
+    }
+
+    state.battleRefreshTimeoutIds.forEach((id) => {
+      try {
+        clearTimeout(id);
+      } catch (error) {}
+    });
+
+    state.battleRefreshTimeoutIds = [];
+  }
+
+  function scheduleForcedTimerRefresh() {
+    if (!state.enabled) return;
+
+    const run = () => {
+      if (!state.enabled) return;
+      state.lastDataRefreshAt = 0;
+      state.lastNetworkPollAt = 0;
+      fetchLootlogTimers({ force: true });
+      refreshView();
+    };
+
+    clearBattleRefreshTimeouts();
+    run();
+
+    [1200, 2800].forEach((delayMs) => {
+      const timeoutId = setTimeout(() => {
+        run();
+      }, delayMs);
+      state.battleRefreshTimeoutIds.push(timeoutId);
+    });
+  }
+
+  function extractNodeText(node, maxLen) {
+    if (!node) return '';
+    const limit = Number.isFinite(maxLen) ? maxLen : 1600;
+
+    try {
+      const raw = String(node.textContent || '');
+      return raw.slice(0, limit);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function hasBattleKeyword(normalizedText) {
+    if (!normalizedText) return false;
+    const keywords = [
+      'pokon',
+      'zabil',
+      'zabiles',
+      'zwycies',
+      'wygral',
+      'walk',
+      'loot',
+      'drop',
+      'exp',
+      'pd'
+    ];
+    return keywords.some((kw) => normalizedText.includes(kw));
+  }
+
+  function shouldSkipBattleObserverNode(node) {
+    if (!node) return true;
+    const el = node.nodeType === 1 ? node : node.parentElement;
+    if (!el || typeof el.closest !== 'function') return false;
+    if (el.closest(`.${TOAST_CLASS}`)) return true;
+    if (el.closest('#rzp-mather-warning')) return true;
+    if (el.closest('#rzp-resp-radar-settings')) return true;
+    return false;
+  }
+
+  function enableBattleLogRefreshHook() {
+    if (state.battleLogObserverBound) return;
+    if (typeof MutationObserver !== 'function') return;
+
+    const observer = new MutationObserver((mutations) => {
+      if (!state.enabled) return;
+
+      const now = Date.now();
+      if (now - state.lastBattleLogTriggerAt < BATTLE_TRIGGER_COOLDOWN_MS) return;
+
+      const mapName = getCurrentMapName();
+      const mapData = getNpcDataForMap(mapName);
+      if (!mapData?.npcData) return;
+
+      const trackedNpcNames = String(mapData.npcData)
+        .split('/')
+        .map((name) => normalizeNpcName(name))
+        .filter(Boolean);
+
+      if (!trackedNpcNames.length) return;
+
+      for (const mutation of mutations) {
+        const candidates = [];
+
+        if (mutation.type === 'childList' && mutation.addedNodes?.length) {
+          mutation.addedNodes.forEach((n) => candidates.push(n));
+        } else if (mutation.type === 'characterData' && mutation.target) {
+          candidates.push(mutation.target);
+        }
+
+        for (const node of candidates) {
+          if (shouldSkipBattleObserverNode(node)) continue;
+
+          const normalizedText = normalizeNpcName(extractNodeText(node, 1800));
+          if (!normalizedText) continue;
+          if (!hasBattleKeyword(normalizedText)) continue;
+
+          const hasNpcMatch = trackedNpcNames.some((npc) => normalizedText.includes(npc));
+          if (!hasNpcMatch) continue;
+
+          state.lastBattleLogTriggerAt = Date.now();
+          scheduleForcedTimerRefresh();
+          return;
+        }
+      }
+    });
+
+    try {
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true
+      });
+      state.battleLogObserver = observer;
+      state.battleLogObserverBound = true;
+    } catch (error) {
+      try {
+        observer.disconnect();
+      } catch (disconnectError) {}
+    }
+  }
+
+  function disableBattleLogRefreshHook() {
+    clearBattleRefreshTimeouts();
+    if (!state.battleLogObserverBound) return;
+    try {
+      state.battleLogObserver?.disconnect?.();
+    } catch (error) {}
+    state.battleLogObserver = null;
+    state.battleLogObserverBound = false;
+  }
+
   function ensureNetworkTimerHook() {
     if (state.networkHookInstalled) return;
     state.networkHookInstalled = true;
@@ -1322,11 +1479,15 @@
     } catch (error) {}
   }
 
-  function pollLootlogTimersApi(world) {
+  function pollLootlogTimersApi(world, options) {
     if (!world) return;
 
+    const force = Boolean(options?.force);
+
     const now = Date.now();
-    if (now - state.lastNetworkPollAt < NETWORK_API_POLL_COOLDOWN_MS) return;
+    const pollCooldown =
+      now < state.warmupUntil ? STARTUP_POLL_COOLDOWN_MS : NETWORK_API_POLL_COOLDOWN_MS;
+    if (!force && now - state.lastNetworkPollAt < pollCooldown) return;
     state.lastNetworkPollAt = now;
     state.lastNetworkPollStatus = 'pending';
 
@@ -1814,21 +1975,26 @@
     }
   }
 
-  function fetchLootlogTimers() {
+  function fetchLootlogTimers(options) {
     let lastStorageTimers = null;
 
     try {
+      const force = Boolean(options?.force);
       const now = Date.now();
       const currentSource = state.diagnostics.source;
       const hasLiveLikeSource = currentSource === 'network' || currentSource === 'persisted';
-      const minInterval = hasLiveLikeSource ? DATA_REFRESH_IDLE_INTERVAL_MS : DATA_REFRESH_MIN_INTERVAL_MS;
-      if (now - state.lastDataRefreshAt < minInterval) {
+      let minInterval = hasLiveLikeSource ? DATA_REFRESH_IDLE_INTERVAL_MS : DATA_REFRESH_MIN_INTERVAL_MS;
+      if (now < state.warmupUntil) {
+        minInterval = Math.min(minInterval, STARTUP_MIN_REFRESH_MS);
+      }
+
+      if (!force && now - state.lastDataRefreshAt < minInterval) {
         return;
       }
       state.lastDataRefreshAt = now;
 
       const world = getWorld();
-      pollLootlogTimersApi(world);
+      pollLootlogTimersApi(world, { force });
 
       const fromNetwork = state.networkTimersCache || {};
       const networkTimerCount = Object.keys(fromNetwork).length;
@@ -1859,6 +2025,7 @@
 
       if (hasActiveNetworkTimers && networkTimerCount > 0) {
         state.lootlogTimers = fromNetwork;
+        state.warmupUntil = 0;
         state.diagnostics.source = 'network';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
@@ -1867,6 +2034,7 @@
 
       if (hasActivePersistedTimers && persistedTimerCount > 0) {
         state.lootlogTimers = fromPersisted;
+        state.warmupUntil = 0;
         state.diagnostics.source = 'persisted';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
@@ -1936,6 +2104,7 @@
 
       if (preferNetwork) {
         state.lootlogTimers = fromNetwork;
+        state.warmupUntil = 0;
         state.diagnostics.source = 'network';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
@@ -1951,6 +2120,7 @@
 
       if (preferPersisted) {
         state.lootlogTimers = fromPersisted;
+        state.warmupUntil = 0;
         state.diagnostics.source = 'persisted';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
@@ -2454,10 +2624,15 @@
     async enable() {
       state.enabled = true;
       state.settings = loadSettings();
+      state.warmupUntil = Date.now() + STARTUP_WARMUP_MS;
+      state.lastDataRefreshAt = 0;
+      state.lastNetworkPollAt = 0;
       ensureNetworkTimerHook();
+      enableBattleLogRefreshHook();
       ensureStyle();
       enableResizeRefresh();
       startLoop();
+      fetchLootlogTimers({ force: true });
       refreshView();
       return true;
     },
@@ -2465,6 +2640,7 @@
     disable() {
       state.enabled = false;
       stopLoop();
+      disableBattleLogRefreshHook();
       hideSettingsPanel();
       removeToasts();
       return true;
