@@ -17,9 +17,7 @@
   const DATA_REFRESH_MIN_INTERVAL_MS = 2500;
   const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
   const UI_REFRESH_INTERVAL_MS = 1000;
-  const BATTLE_TRIGGER_COOLDOWN_MS = 5000;
-  const BATTLE_STATE_POLL_INTERVAL_MS = 250;
-  const BATTLE_HOOK_REBIND_INTERVAL_MS = 1500;
+  const TIMER_WINDOW_TRIGGER_COOLDOWN_MS = 2500;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -192,13 +190,10 @@
     lastNetworkPollAt: 0,
     warmupUntil: 0,
     lastNetworkPollStatus: 'idle',
-    battleLogObserverBound: false,
-    battleLogObserver: null,
-    battleStateIntervalId: null,
-    battleHookWatcherId: null,
-    battleWasActive: false,
-    lastBattleLogTriggerAt: 0,
-    battleRefreshTimeoutIds: [],
+    timerWindowObserverBound: false,
+    timerWindowObserver: null,
+    lastTimerWindowTriggerAt: 0,
+    forcedRefreshTimeoutIds: [],
     networkHookInstalled: false,
     apiTimersCache: {},
     apiMeta: {
@@ -1240,19 +1235,19 @@
     } catch (error) {}
   }
 
-  function clearBattleRefreshTimeouts() {
-    if (!Array.isArray(state.battleRefreshTimeoutIds)) {
-      state.battleRefreshTimeoutIds = [];
+  function clearForcedRefreshTimeouts() {
+    if (!Array.isArray(state.forcedRefreshTimeoutIds)) {
+      state.forcedRefreshTimeoutIds = [];
       return;
     }
 
-    state.battleRefreshTimeoutIds.forEach((id) => {
+    state.forcedRefreshTimeoutIds.forEach((id) => {
       try {
         clearTimeout(id);
       } catch (error) {}
     });
 
-    state.battleRefreshTimeoutIds = [];
+    state.forcedRefreshTimeoutIds = [];
   }
 
   function scheduleForcedTimerRefresh() {
@@ -1266,14 +1261,14 @@
       refreshView();
     };
 
-    clearBattleRefreshTimeouts();
+    clearForcedRefreshTimeouts();
     run();
 
     [1200, 2800].forEach((delayMs) => {
       const timeoutId = setTimeout(() => {
         run();
       }, delayMs);
-      state.battleRefreshTimeoutIds.push(timeoutId);
+      state.forcedRefreshTimeoutIds.push(timeoutId);
     });
   }
 
@@ -1289,24 +1284,7 @@
     }
   }
 
-  function hasBattleKeyword(normalizedText) {
-    if (!normalizedText) return false;
-    const keywords = [
-      'pokon',
-      'zabil',
-      'zabiles',
-      'zwycies',
-      'wygral',
-      'walk',
-      'loot',
-      'drop',
-      'exp',
-      'pd'
-    ];
-    return keywords.some((kw) => normalizedText.includes(kw));
-  }
-
-  function shouldSkipBattleObserverNode(node) {
+  function shouldSkipTimerWindowNode(node) {
     if (!node) return true;
     const el = node.nodeType === 1 ? node : node.parentElement;
     if (!el || typeof el.closest !== 'function') return false;
@@ -1315,137 +1293,47 @@
     if (el.closest('#rzp-resp-radar-settings')) return true;
     return false;
   }
-
-  function isBattleActiveForRadar() {
-    try {
-      const battle = window.Engine?.battle;
-      if (battle) {
-        if (typeof battle.isBattle === 'function') return Boolean(battle.isBattle());
-        if (typeof battle.isActive === 'function') return Boolean(battle.isActive());
-        if (typeof battle.isOpened === 'function') return Boolean(battle.isOpened());
-
-        const boolKeys = ['inBattle', 'isBattle', 'active', 'opened', 'isOpened', 'visible'];
-        for (const key of boolKeys) {
-          const value = battle[key];
-          if (typeof value === 'boolean') return value;
-        }
-      }
-    } catch (error) {}
-
-    try {
-      if (window.g?.battle) return true;
-    } catch (error) {}
-
-    const btn = document.querySelector('.auto-fight-btn');
-    if (!btn) return false;
-
-    try {
-      return getComputedStyle(btn).display !== 'none' && getComputedStyle(btn).visibility !== 'hidden';
-    } catch (error) {
-      return true;
-    }
+  function isLikelyTimerWindowNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const el = node;
+    const idClass = `${el.id || ''} ${el.className || ''}`.toLowerCase();
+    if (/timer|minut|lootlog|elite/.test(idClass)) return true;
+    return false;
   }
 
-  function checkBattleStateTransition() {
-    if (!state.enabled) return;
-
+  function getTrackedNpcNamesForCurrentMap() {
     const mapName = getCurrentMapName();
     const mapData = getNpcDataForMap(mapName);
-    if (!mapData?.npcData) return;
-
-    const nowInBattle = isBattleActiveForRadar();
-    if (nowInBattle) {
-      state.battleWasActive = true;
-      return;
-    }
-
-    if (!state.battleWasActive) return;
-
-    state.battleWasActive = false;
-    const now = Date.now();
-    if (now - state.lastBattleLogTriggerAt < BATTLE_TRIGGER_COOLDOWN_MS) return;
-
-    state.lastBattleLogTriggerAt = now;
-    scheduleForcedTimerRefresh();
+    if (!mapData?.npcData) return [];
+    return String(mapData.npcData)
+      .split('/')
+      .map((name) => normalizeNpcName(name))
+      .filter(Boolean);
   }
 
-  function startBattleStatePolling() {
-    if (state.battleStateIntervalId) return;
-    state.battleStateIntervalId = setInterval(checkBattleStateTransition, BATTLE_STATE_POLL_INTERVAL_MS);
+  function nodeLooksLikeNpcTimerEntry(node, trackedNpcNames) {
+    if (!node || !trackedNpcNames.length) return false;
+    const normalizedText = normalizeNpcName(extractNodeText(node, 2400));
+    if (!normalizedText) return false;
+
+    // Timer lines usually include HH:MM:SS values.
+    const hasHms = /\b\d{1,2}\s*\d{2}\s*\d{2}\b/.test(normalizedText) || /\b\d{2}\s*\d{2}\s*\d{2}\b/.test(normalizedText);
+    if (!hasHms) return false;
+
+    return trackedNpcNames.some((npc) => normalizedText.includes(npc));
   }
 
-  function stopBattleStatePolling() {
-    if (!state.battleStateIntervalId) return;
-    clearInterval(state.battleStateIntervalId);
-    state.battleStateIntervalId = null;
-  }
-
-  function triggerPostBattleRefreshFromHook() {
-    if (!state.enabled) return;
-
-    // Lootlog data can land with slight delay after endBattle event.
-    [400, 1400, 2800].forEach((delayMs) => {
-      const timeoutId = setTimeout(() => {
-        if (!state.enabled) return;
-        scheduleForcedTimerRefresh();
-      }, delayMs);
-      state.battleRefreshTimeoutIds.push(timeoutId);
-    });
-  }
-
-  function ensureBattleEndHook() {
-    const battle = window.Engine?.battle;
-    if (!battle || typeof battle.endBattle !== 'function') return false;
-    if (battle.__rzpRespRadarEndBattleWrapped) return true;
-
-    const originalEndBattle = battle.endBattle;
-    battle.endBattle = function (...args) {
-      const result = originalEndBattle.apply(this, args);
-      try {
-        triggerPostBattleRefreshFromHook();
-      } catch (error) {}
-      return result;
-    };
-
-    battle.__rzpRespRadarEndBattleWrapped = true;
-    return true;
-  }
-
-  function startBattleEndHookWatcher() {
-    if (state.battleHookWatcherId) return;
-
-    ensureBattleEndHook();
-    state.battleHookWatcherId = setInterval(() => {
-      ensureBattleEndHook();
-    }, BATTLE_HOOK_REBIND_INTERVAL_MS);
-  }
-
-  function stopBattleEndHookWatcher() {
-    if (!state.battleHookWatcherId) return;
-    clearInterval(state.battleHookWatcherId);
-    state.battleHookWatcherId = null;
-  }
-
-  function enableBattleLogRefreshHook() {
-    if (state.battleLogObserverBound) return;
+  function enableTimerWindowRefreshHook() {
+    if (state.timerWindowObserverBound) return;
     if (typeof MutationObserver !== 'function') return;
 
     const observer = new MutationObserver((mutations) => {
       if (!state.enabled) return;
 
-      checkBattleStateTransition();
-
       const now = Date.now();
-      if (now - state.lastBattleLogTriggerAt < BATTLE_TRIGGER_COOLDOWN_MS) return;
+      if (now - state.lastTimerWindowTriggerAt < TIMER_WINDOW_TRIGGER_COOLDOWN_MS) return;
 
-      const mapName = getCurrentMapName();
-      const mapData = getNpcDataForMap(mapName);
-      if (!mapData?.npcData) return;
-
-      const trackedNpcNames = String(mapData.npcData)
-        .split('/')
-        .map((name) => normalizeNpcName(name))
-        .filter(Boolean);
+      const trackedNpcNames = getTrackedNpcNamesForCurrentMap();
 
       if (!trackedNpcNames.length) return;
 
@@ -1459,16 +1347,23 @@
         }
 
         for (const node of candidates) {
-          if (shouldSkipBattleObserverNode(node)) continue;
+          if (shouldSkipTimerWindowNode(node)) continue;
 
-          const normalizedText = normalizeNpcName(extractNodeText(node, 1800));
-          if (!normalizedText) continue;
-          if (!hasBattleKeyword(normalizedText)) continue;
+          let candidateNode = node;
+          if (candidateNode.nodeType !== 1 && candidateNode.parentElement) {
+            candidateNode = candidateNode.parentElement;
+          }
 
-          const hasNpcMatch = trackedNpcNames.some((npc) => normalizedText.includes(npc));
-          if (!hasNpcMatch) continue;
+          if (!candidateNode) continue;
 
-          state.lastBattleLogTriggerAt = Date.now();
+          const isLikelyWindowMutation =
+            isLikelyTimerWindowNode(candidateNode) ||
+            (typeof candidateNode.closest === 'function' && Boolean(candidateNode.closest('[id*="timer" i], [class*="timer" i], [class*="minut" i], [class*="lootlog" i], [class*="elite" i]')));
+          if (!isLikelyWindowMutation) continue;
+
+          if (!nodeLooksLikeNpcTimerEntry(candidateNode, trackedNpcNames)) continue;
+
+          state.lastTimerWindowTriggerAt = Date.now();
           scheduleForcedTimerRefresh();
           return;
         }
@@ -1481,8 +1376,8 @@
         childList: true,
         characterData: true
       });
-      state.battleLogObserver = observer;
-      state.battleLogObserverBound = true;
+      state.timerWindowObserver = observer;
+      state.timerWindowObserverBound = true;
     } catch (error) {
       try {
         observer.disconnect();
@@ -1490,17 +1385,14 @@
     }
   }
 
-  function disableBattleLogRefreshHook() {
-    clearBattleRefreshTimeouts();
-    stopBattleStatePolling();
-    stopBattleEndHookWatcher();
-    state.battleWasActive = false;
-    if (!state.battleLogObserverBound) return;
+  function disableTimerWindowRefreshHook() {
+    clearForcedRefreshTimeouts();
+    if (!state.timerWindowObserverBound) return;
     try {
-      state.battleLogObserver?.disconnect?.();
+      state.timerWindowObserver?.disconnect?.();
     } catch (error) {}
-    state.battleLogObserver = null;
-    state.battleLogObserverBound = false;
+    state.timerWindowObserver = null;
+    state.timerWindowObserverBound = false;
   }
 
   function ensureNetworkTimerHook() {
@@ -2744,14 +2636,11 @@
     async enable() {
       state.enabled = true;
       state.settings = loadSettings();
-      state.battleWasActive = isBattleActiveForRadar();
-      startBattleStatePolling();
-      startBattleEndHookWatcher();
       state.warmupUntil = Date.now() + STARTUP_WARMUP_MS;
       state.lastDataRefreshAt = 0;
       state.lastNetworkPollAt = 0;
       ensureNetworkTimerHook();
-      enableBattleLogRefreshHook();
+      enableTimerWindowRefreshHook();
       ensureStyle();
       enableResizeRefresh();
       startLoop();
@@ -2763,7 +2652,7 @@
     disable() {
       state.enabled = false;
       stopLoop();
-      disableBattleLogRefreshHook();
+      disableTimerWindowRefreshHook();
       hideSettingsPanel();
       removeToasts();
       return true;
