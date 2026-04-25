@@ -18,6 +18,7 @@
   const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
   const UI_REFRESH_INTERVAL_MS = 1000;
   const BATTLE_TRIGGER_COOLDOWN_MS = 5000;
+  const BATTLE_STATE_POLL_INTERVAL_MS = 250;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -192,6 +193,7 @@
     lastNetworkPollStatus: 'idle',
     battleLogObserverBound: false,
     battleLogObserver: null,
+    battleStateIntervalId: null,
     battleWasActive: false,
     lastBattleLogTriggerAt: 0,
     battleRefreshTimeoutIds: [],
@@ -1342,12 +1344,48 @@
     }
   }
 
+  function checkBattleStateTransition() {
+    if (!state.enabled) return;
+
+    const mapName = getCurrentMapName();
+    const mapData = getNpcDataForMap(mapName);
+    if (!mapData?.npcData) return;
+
+    const nowInBattle = isBattleActiveForRadar();
+    if (nowInBattle) {
+      state.battleWasActive = true;
+      return;
+    }
+
+    if (!state.battleWasActive) return;
+
+    state.battleWasActive = false;
+    const now = Date.now();
+    if (now - state.lastBattleLogTriggerAt < BATTLE_TRIGGER_COOLDOWN_MS) return;
+
+    state.lastBattleLogTriggerAt = now;
+    scheduleForcedTimerRefresh();
+  }
+
+  function startBattleStatePolling() {
+    if (state.battleStateIntervalId) return;
+    state.battleStateIntervalId = setInterval(checkBattleStateTransition, BATTLE_STATE_POLL_INTERVAL_MS);
+  }
+
+  function stopBattleStatePolling() {
+    if (!state.battleStateIntervalId) return;
+    clearInterval(state.battleStateIntervalId);
+    state.battleStateIntervalId = null;
+  }
+
   function enableBattleLogRefreshHook() {
     if (state.battleLogObserverBound) return;
     if (typeof MutationObserver !== 'function') return;
 
     const observer = new MutationObserver((mutations) => {
       if (!state.enabled) return;
+
+      checkBattleStateTransition();
 
       const now = Date.now();
       if (now - state.lastBattleLogTriggerAt < BATTLE_TRIGGER_COOLDOWN_MS) return;
@@ -1362,16 +1400,6 @@
         .filter(Boolean);
 
       if (!trackedNpcNames.length) return;
-
-      const nowInBattle = isBattleActiveForRadar();
-      if (nowInBattle) {
-        state.battleWasActive = true;
-      } else if (state.battleWasActive) {
-        state.battleWasActive = false;
-        state.lastBattleLogTriggerAt = now;
-        scheduleForcedTimerRefresh();
-        return;
-      }
 
       for (const mutation of mutations) {
         const candidates = [];
@@ -1416,6 +1444,7 @@
 
   function disableBattleLogRefreshHook() {
     clearBattleRefreshTimeouts();
+    stopBattleStatePolling();
     state.battleWasActive = false;
     if (!state.battleLogObserverBound) return;
     try {
@@ -2667,6 +2696,7 @@
       state.enabled = true;
       state.settings = loadSettings();
       state.battleWasActive = isBattleActiveForRadar();
+      startBattleStatePolling();
       state.warmupUntil = Date.now() + STARTUP_WARMUP_MS;
       state.lastDataRefreshAt = 0;
       state.lastNetworkPollAt = 0;
