@@ -355,29 +355,70 @@
     if (!key || typeof key !== 'string') return false;
     if (key === 'll:query-cache') return true;
     if (key.startsWith('ll:')) return true;
-    return /lootlog|guild-timers|query-cache|timers?/i.test(key);
+    return /lootlog|guild-timers|guildTimers|query-cache|react-query|persist|timers?/i.test(key);
   }
 
-  function getLootlogStorageEntries() {
+  function getStorageEntriesFromArea(area, areaName, includeAllKeys) {
     const entries = [];
 
     try {
-      for (let i = 0; i < window.localStorage.length; i++) {
-        const key = window.localStorage.key(i);
-        if (!isLootlogStorageKey(key)) continue;
-        const value = window.localStorage.getItem(key);
+      for (let i = 0; i < area.length; i++) {
+        const key = area.key(i);
+        if (!includeAllKeys && !isLootlogStorageKey(key)) continue;
+        const value = area.getItem(key);
         if (typeof value !== 'string' || value.length < 2) continue;
-        entries.push([key, value]);
+        entries.push([`${areaName}:${key}`, value]);
       }
     } catch (error) {}
 
+    return entries;
+  }
+
+  function getLootlogStorageEntries(includeAllKeys) {
+    const entries = [];
+
+    entries.push(...getStorageEntriesFromArea(window.localStorage, 'localStorage', includeAllKeys));
+    entries.push(...getStorageEntriesFromArea(window.sessionStorage, 'sessionStorage', includeAllKeys));
+
     entries.sort((a, b) => {
-      if (a[0] === 'll:query-cache') return -1;
-      if (b[0] === 'll:query-cache') return 1;
+      if (a[0].endsWith(':ll:query-cache')) return -1;
+      if (b[0].endsWith(':ll:query-cache')) return 1;
       return a[0].localeCompare(b[0]);
     });
 
     return entries;
+  }
+
+  function isTimerLikeArray(node) {
+    if (!Array.isArray(node) || node.length === 0) return false;
+
+    let matches = 0;
+    const sampleSize = Math.min(node.length, 20);
+
+    for (let i = 0; i < sampleSize; i++) {
+      const item = node[i];
+      if (!item || typeof item !== 'object') continue;
+      const npc = item.npc || item.mob || item.monster || item.entity;
+      const hasNpcName = Boolean(
+        npc?.name || item.name || item.npcName || item.mobName || item.entityName
+      );
+      const hasType = Boolean(
+        normalizeNpcType(npc?.type || item.type || item.npcType || item.mobType || item.kind)
+      );
+      const hasTime =
+        item.minSpawnTime !== undefined ||
+        item.maxSpawnTime !== undefined ||
+        item.minRespawnTime !== undefined ||
+        item.maxRespawnTime !== undefined ||
+        item.remainingSeconds !== undefined ||
+        item.timeLeft !== undefined;
+
+      if (hasNpcName && hasType && hasTime) {
+        matches += 1;
+      }
+    }
+
+    return matches >= 1;
   }
 
   function collectGuildTimerArrays(root, world) {
@@ -390,12 +431,15 @@
       seen.add(node);
 
       if (Array.isArray(node)) {
+        if (isTimerLikeArray(node)) {
+          arrays.push(node);
+        }
         node.forEach(visit);
         return;
       }
 
       const queryKey = node.queryKey;
-      if (Array.isArray(queryKey) && queryKey[0] === 'guild-timers') {
+      if (Array.isArray(queryKey) && (queryKey[0] === 'guild-timers' || queryKey[0] === 'guildTimers')) {
         const queryWorld = String(queryKey[1] || '').toLowerCase();
         if (!world || !queryWorld || queryWorld === world) {
           const data = node.state?.data ?? node.data ?? node.payload?.data;
@@ -475,45 +519,93 @@
   function parseTimersFromLootlogStorage(world) {
     const now = Date.now();
     const parsedTimers = {};
-    const entries = getLootlogStorageEntries();
+    const entries = getLootlogStorageEntries(false);
 
-    for (const [, rawValue] of entries) {
-      const parsed = safeJsonParse(rawValue);
-      if (!parsed) continue;
+    const parseFromEntries = (list) => {
+      for (const [, rawValue] of list) {
+        const parsed = safeJsonParse(rawValue);
+        if (!parsed) continue;
 
-      const roots = [parsed];
-      if (typeof parsed.state === 'string') {
-        const parsedState = safeJsonParse(parsed.state);
-        if (parsedState) roots.push(parsedState);
-      }
-      if (typeof parsed.clientState === 'string') {
-        const parsedClientState = safeJsonParse(parsed.clientState);
-        if (parsedClientState) roots.push(parsedClientState);
-      }
+        const roots = [parsed];
+        if (typeof parsed.state === 'string') {
+          const parsedState = safeJsonParse(parsed.state);
+          if (parsedState) roots.push(parsedState);
+        }
+        if (typeof parsed.clientState === 'string') {
+          const parsedClientState = safeJsonParse(parsed.clientState);
+          if (parsedClientState) roots.push(parsedClientState);
+        }
 
-      for (const root of roots) {
-        const timerArrays = collectGuildTimerArrays(root, world);
-        timerArrays.forEach((timers) => {
-          timers.forEach((timer) => {
-            const normalized = normalizeTimerEntry(timer, now);
-            if (!normalized) return;
+        for (const root of roots) {
+          const timerArrays = collectGuildTimerArrays(root, world);
+          timerArrays.forEach((timers) => {
+            timers.forEach((timer) => {
+              const normalized = normalizeTimerEntry(timer, now);
+              if (!normalized) return;
 
-            const existing = parsedTimers[normalized.name];
-            if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
-              parsedTimers[normalized.name] = normalized;
-            }
+              const existing = parsedTimers[normalized.name];
+              if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
+                parsedTimers[normalized.name] = normalized;
+              }
+            });
           });
-        });
+        }
       }
+    };
+
+    parseFromEntries(entries);
+
+    // Fallback for new Lootlog versions that persist under generic keys.
+    if (!Object.keys(parsedTimers).length) {
+      parseFromEntries(getLootlogStorageEntries(true));
     }
 
     return parsedTimers;
   }
 
+  function parseTimersFromLootlogDom() {
+    const fromDom = {};
+
+    try {
+      const timerRoot = document.querySelector('.elite-timer-wnd, [class*="ll-timer"], [class*="timer"]');
+      if (!timerRoot) return fromDom;
+
+      const text = (timerRoot.textContent || '').replace(/\s+/g, ' ');
+      const regex = /\[(E2|T)\]\s*([^\d\[]+?)\s*(\d{2}:\d{2}:\d{2})/gi;
+      let match;
+
+      while ((match = regex.exec(text)) !== null) {
+        const typeTag = String(match[1] || '').toUpperCase();
+        const name = String(match[2] || '').trim();
+        const time = String(match[3] || '').trim();
+        if (!name || !time) continue;
+
+        const parts = time.split(':').map((v) => Number(v));
+        if (parts.length !== 3 || parts.some((v) => !Number.isFinite(v))) continue;
+
+        fromDom[name] = {
+          name,
+          type: typeTag === 'T' ? 'TITAN' : 'ELITE2',
+          minRemainingSeconds: 0,
+          remainingSeconds: parts[0] * 3600 + parts[1] * 60 + parts[2],
+          addedByName: null
+        };
+      }
+    } catch (error) {}
+
+    return fromDom;
+  }
+
   function fetchLootlogTimers() {
     try {
       const world = getWorld();
-      state.lootlogTimers = parseTimersFromLootlogStorage(world);
+      const fromStorage = parseTimersFromLootlogStorage(world);
+      if (Object.keys(fromStorage).length) {
+        state.lootlogTimers = fromStorage;
+        return;
+      }
+
+      state.lootlogTimers = parseTimersFromLootlogDom();
     } catch (error) {
       state.lootlogTimers = {};
     }
