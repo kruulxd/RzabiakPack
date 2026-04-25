@@ -981,12 +981,22 @@
 
     const nameColor = npcType === 'TITAN' ? '#f87171' : '#fb7185';
 
-    if (timer && typeof timer.remainingSeconds === 'number') {
+    const hasTimer = timer && typeof timer.remainingSeconds === 'number';
+    const timerExpired = hasTimer && timer.remainingSeconds <= 0;
+    const timerActive = hasTimer && timer.remainingSeconds > 0;
+
+    if (timerActive) {
       node.innerHTML = `
         <span style="color:${nameColor};font-weight:700;">${npcName}</span>
         <span style="opacity:.65;"> - </span>
         <span>respi za</span>
         <span style="color:#86efac;font-weight:700;">${formatTime(timer.remainingSeconds)}</span>
+      `;
+    } else if (timerExpired) {
+      node.innerHTML = `
+        <span style="color:${nameColor};font-weight:700;">${npcName}</span>
+        <span style="opacity:.65;"> - </span>
+        <span style="color:#facc15;font-weight:700;">zrespił/a</span>
       `;
     } else {
       node.innerHTML = `
