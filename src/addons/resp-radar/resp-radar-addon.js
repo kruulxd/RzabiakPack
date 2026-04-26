@@ -324,10 +324,18 @@
     const npcType = titanData ? 'TITAN' : 'ELITE2';
     const container = ensureContainer();
     let html = '';
-    if (!mapName) {
-      html = `<div class="timer-row"><span class="timer-empty">Nie można wykryć mapy</span></div>`;
-    } else if (!npcData) {
-      html = `<div class="timer-row"><span class="timer-empty">Brak obsługi dla tej mapy: <b>${mapName}</b></span></div>`;
+    if (!npcData) {
+      // Nie jesteśmy na mapie z elitą 2 ani tytanem - ukryj kontener
+      container.innerHTML = '';
+      container.style.display = 'none';
+      return;
+    }
+
+    // Sprawdź czy lootlog jest włączony
+    const lootlogActive = !!(window.lootlogGameClientApi && window.lootlogGameClientApi.getTimers);
+
+    if (!lootlogActive) {
+      html = `<div class="timer-row"><span class="timer-empty">Nie masz włączonego lootloga.</span></div>`;
     } else {
       const npcNames = npcData.split('/').map(n => n.trim());
       npcNames.forEach((npcName) => {
