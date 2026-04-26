@@ -938,6 +938,14 @@
       box-shadow: 0 0 10px rgba(74,222,128,0.35);
       transform: translateY(-1px);
     }
+    .mg-addon-dock-btn.glow-active {
+      border-color: rgba(74,222,128,0.9);
+      box-shadow: 0 0 14px rgba(74,222,128,0.5), 0 0 6px rgba(74,222,128,0.3) inset;
+      background: linear-gradient(180deg, rgba(18,52,28,0.98), rgba(13,32,18,0.98));
+    }
+    .mg-addon-dock-btn.glow-active:hover {
+      box-shadow: 0 0 18px rgba(74,222,128,0.65), 0 0 8px rgba(74,222,128,0.4) inset;
+    }
     #mg-dock-tooltip {
       position: fixed;
       z-index: 15;

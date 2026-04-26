@@ -10,18 +10,22 @@
   const DOCK_ID = 'rzp-resp-radar-dock';
   const CONTAINER_ID = 'rzp-resp-radar-container';
   const STORAGE_KEY_POSITION = 'rzp_resp_radar_position';
-  const DEFAULT_POSITION = 'top-right';
+  const STORAGE_KEY_VISIBLE = 'rzp_resp_radar_visible';
+  const DEFAULT_POSITION = 'top-center';
 
   const POSITIONS = {
-    'top-left': { top: '80px', left: '10px', right: 'auto', bottom: 'auto', label: 'Góra - Lewo' },
-    'top-right': { top: '80px', right: '10px', left: 'auto', bottom: 'auto', label: 'Góra - Prawo' },
-    'bottom-left': { bottom: '10px', left: '10px', right: 'auto', top: 'auto', label: 'Dół - Lewo' },
-    'bottom-right': { bottom: '10px', right: '10px', left: 'auto', top: 'auto', label: 'Dół - Prawo' }
+    'top-left': { top: '10px', left: '10px', right: 'auto', bottom: 'auto', transform: 'none', label: 'Góra - Lewo' },
+    'top-center': { top: '10px', left: '50%', right: 'auto', bottom: 'auto', transform: 'translateX(-50%)', label: 'Góra - Środek' },
+    'top-right': { top: '10px', right: '10px', left: 'auto', bottom: 'auto', transform: 'none', label: 'Góra - Prawo' },
+    'bottom-left': { bottom: '10px', left: '10px', right: 'auto', top: 'auto', transform: 'none', label: 'Dół - Lewo' },
+    'bottom-center': { bottom: '10px', left: '50%', right: 'auto', top: 'auto', transform: 'translateX(-50%)', label: 'Dół - Środek' },
+    'bottom-right': { bottom: '10px', right: '10px', left: 'auto', top: 'auto', transform: 'none', label: 'Dół - Prawo' }
   };
 
   /* --- State ------------------------------------------------ */
   const state = {
     enabled: false,
+    visible: true,
     currentMapName: null,
     lootlogTimers: {},
     currentWorld: 'arkantes',
@@ -44,6 +48,21 @@
   function savePosition(position) {
     try {
       localStorage.setItem(STORAGE_KEY_POSITION, position);
+    } catch (e) {}
+  }
+
+  function loadVisible() {
+    try {
+      const val = localStorage.getItem(STORAGE_KEY_VISIBLE);
+      return val === null ? true : val === 'true';
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function saveVisible(visible) {
+    try {
+      localStorage.setItem(STORAGE_KEY_VISIBLE, String(visible));
     } catch (e) {}
   }
 
@@ -468,8 +487,8 @@
     style.id = STYLE_ID;
     style.textContent = `
       #${CONTAINER_ID} {
-        position: fixed;
-        z-index: 18;
+        position: absolute;
+        z-index: 5;
         min-width: 280px;
         max-width: 400px;
         border-radius: 12px;
@@ -484,6 +503,7 @@
         font-size: 13px;
         padding: 12px;
         user-select: none;
+        pointer-events: auto;
       }
 
       #${CONTAINER_ID} .timer-row {
@@ -523,8 +543,8 @@
 
       #${SETTINGS_ID} {
         position: fixed;
-        z-index: 19;
-        min-width: 320px;
+        z-index: 20;
+        min-width: 360px;
         border-radius: 12px;
         border: 1px solid rgba(52,211,100,0.18);
         background: linear-gradient(160deg, rgba(6,16,9,0.98), rgba(4,12,7,0.99));
@@ -537,49 +557,71 @@
         font-size: 13px;
         user-select: none;
         display: none;
+        overflow: hidden;
       }
 
       #${SETTINGS_ID} .header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        padding: 12px 14px;
+        gap: 6px;
+        padding: 9px 12px 8px;
         background: rgba(0,0,0,0.2);
         border-bottom: 1px solid rgba(52,211,100,0.12);
+        cursor: move;
+      }
+
+      #${SETTINGS_ID} .header::before {
+        content: '';
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #22c55e;
+        opacity: 0.7;
+        flex-shrink: 0;
       }
 
       #${SETTINGS_ID} .header-title {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-weight: 600;
-        color: #34d364;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        color: #c8ead4;
+        flex: 1;
       }
 
       #${SETTINGS_ID} .close-btn {
-        cursor: pointer;
-        padding: 4px 8px;
-        border-radius: 6px;
-        background: rgba(239,68,68,0.15);
-        border: 1px solid rgba(239,68,68,0.3);
-        color: #f87171;
+        margin-left: auto;
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border: 1px solid rgba(52,211,100,0.18);
+        background: rgba(0,0,0,0.2);
+        color: #3d6647;
         font-size: 11px;
-        font-weight: 600;
-        transition: all 0.2s;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+        font-family: inherit;
+        padding: 0;
       }
 
       #${SETTINGS_ID} .close-btn:hover {
-        background: rgba(239,68,68,0.25);
-        border-color: rgba(239,68,68,0.5);
+        background: rgba(239,68,68,0.18);
+        border-color: rgba(239,68,68,0.35);
+        color: #f87171;
       }
 
       #${SETTINGS_ID} .content {
-        padding: 14px;
+        padding: 10px 12px 12px;
+        font-size: 11px;
       }
 
       #${SETTINGS_ID} .setting-group {
-        margin-bottom: 16px;
+        margin-bottom: 14px;
       }
 
       #${SETTINGS_ID} .setting-group:last-child {
@@ -587,29 +629,29 @@
       }
 
       #${SETTINGS_ID} .setting-label {
-        display: block;
+        color: #4a7a54;
+        font-size: 11px;
         margin-bottom: 8px;
-        color: #a0c0a8;
-        font-size: 12px;
-        font-weight: 500;
+        display: block;
       }
 
       #${SETTINGS_ID} .position-grid {
         display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 8px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
       }
 
       #${SETTINGS_ID} .position-btn {
         cursor: pointer;
-        padding: 10px;
-        border-radius: 8px;
+        padding: 8px 6px;
+        border-radius: 7px;
         background: rgba(52,211,100,0.08);
         border: 1px solid rgba(52,211,100,0.2);
         color: #c8ead4;
         text-align: center;
-        font-size: 12px;
+        font-size: 10px;
         transition: all 0.2s;
+        line-height: 1.3;
       }
 
       #${SETTINGS_ID} .position-btn:hover {
@@ -636,17 +678,16 @@
 
     const modal = document.createElement('div');
     modal.id = SETTINGS_ID;
+    modal.style.top = '120px';
+    modal.style.left = '60px';
     modal.innerHTML = `
       <div class="header">
-        <div class="header-title">
-          <span>⏱</span>
-          <span>Timer z danej lokacji - Ustawienia</span>
-        </div>
-        <div class="close-btn">✕ Zamknij</div>
+        <span class="header-title">Timer z danej lokacji — Ustawienia</span>
+        <button class="close-btn">✕</button>
       </div>
       <div class="content">
         <div class="setting-group">
-          <label class="setting-label">Pozycja timera na ekranie:</label>
+          <span class="setting-label">Pozycja timera na ekranie gry:</span>
           <div class="position-grid">
             ${Object.keys(POSITIONS).map(key => `
               <div class="position-btn" data-position="${key}">${POSITIONS[key].label}</div>
@@ -669,23 +710,50 @@
       });
     });
 
-    // Update active button
+    // Draggable support
+    const header = modal.querySelector('.header');
+    let dragging = false, offsetX = 0, offsetY = 0;
+
+    header.addEventListener('mousedown', e => {
+      if (e.target.closest('.close-btn') || e.target.closest('button')) return;
+      dragging = true;
+      offsetX = e.clientX - modal.offsetLeft;
+      offsetY = e.clientY - modal.offsetTop;
+      modal.style.transform = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      modal.style.left = (e.clientX - offsetX) + 'px';
+      modal.style.top = (e.clientY - offsetY) + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      dragging = false;
+    });
+
+    // Dock visibility row
+    const dockRow = window.RZP_DOCK_HIDDEN_UTILS?.makeRow?.(ADDON_ID);
+    if (dockRow) {
+      const body = modal.querySelector('.content');
+      if (body) body.appendChild(dockRow);
+    }
+
     updateActivePosition();
   }
 
   function openSettings() {
-    const modal = document.getElementById(SETTINGS_ID);
+    let modal = document.getElementById(SETTINGS_ID);
     if (!modal) {
       createSettingsModal();
+      modal = document.getElementById(SETTINGS_ID);
     }
 
-    const m = document.getElementById(SETTINGS_ID);
-    if (m) {
-      m.style.display = 'block';
-      m.style.top = '50%';
-      m.style.left = '50%';
-      m.style.transform = 'translate(-50%, -50%)';
-      updateActivePosition();
+    if (modal) {
+      const isVisible = modal.style.display === 'block';
+      modal.style.display = isVisible ? 'none' : 'block';
+      if (!isVisible) updateActivePosition();
     }
   }
 
@@ -722,27 +790,71 @@
       container.style.right = pos.right;
       container.style.bottom = pos.bottom;
       container.style.left = pos.left;
+      container.style.transform = pos.transform;
     }
   }
 
   /* --- Container ---------------------------------------------- */
   function ensureContainer() {
     let container = document.getElementById(CONTAINER_ID);
-    if (!container) {
+    const canvas = document.getElementById('GAME_CANVAS');
+
+    if (!container && canvas) {
       ensureStyle();
 
       container = document.createElement('div');
       container.id = CONTAINER_ID;
-      document.body.appendChild(container);
+      canvas.parentElement.appendChild(container);
     }
 
-    const pos = POSITIONS[state.position];
-    container.style.top = pos.top;
-    container.style.right = pos.right;
-    container.style.bottom = pos.bottom;
-    container.style.left = pos.left;
+    if (container) {
+      const pos = POSITIONS[state.position];
+      container.style.top = pos.top;
+      container.style.right = pos.right;
+      container.style.bottom = pos.bottom;
+      container.style.left = pos.left;
+      container.style.transform = pos.transform;
+      container.style.display = state.visible ? 'block' : 'none';
+    }
 
     return container;
+  }
+
+  /* --- Visibility --------------------------------------------- */
+  function showTimer() {
+    state.visible = true;
+    saveVisible(true);
+    const container = document.getElementById(CONTAINER_ID);
+    if (container) container.style.display = 'block';
+    updateDockGlow();
+    refreshView();
+  }
+
+  function hideTimer() {
+    state.visible = false;
+    saveVisible(false);
+    const container = document.getElementById(CONTAINER_ID);
+    if (container) container.style.display = 'none';
+    updateDockGlow();
+  }
+
+  function toggleTimer() {
+    if (state.visible) {
+      hideTimer();
+    } else {
+      showTimer();
+    }
+  }
+
+  function updateDockGlow() {
+    const dockBtn = document.querySelector(`[data-addon-id="${ADDON_ID}"]`);
+    if (!dockBtn) return;
+
+    if (state.visible && state.enabled) {
+      dockBtn.classList.add('glow-active');
+    } else {
+      dockBtn.classList.remove('glow-active');
+    }
   }
 
   /* --- Lifecycle ---------------------------------------------- */
@@ -751,6 +863,7 @@
 
     state.enabled = true;
     state.position = loadPosition();
+    state.visible = loadVisible();
 
     ensureContainer();
     fetchLootlogTimers();
@@ -777,6 +890,7 @@
     state.tickIntervalId = setInterval(tickTimers, 1000);
 
     refreshView();
+    updateDockGlow();
   }
 
   function disable() {
@@ -809,6 +923,13 @@
       container.innerHTML = '';
       container.style.display = 'none';
     }
+
+    updateDockGlow();
+  }
+
+  /* --- Dock Handlers ------------------------------------------ */
+  function runWidget() {
+    toggleTimer();
   }
 
   function toggleDock() {
@@ -822,10 +943,11 @@
 
   window.RZP_ADDONS_REGISTRY[ADDON_ID] = {
     name: ADDON_ID,
-    version: '2026-04-26-panel-v5',
+    version: '2026-04-26-panel-v6',
     enable,
     disable,
     getState: () => state,
+    runWidget,
     openSettings,
     closeSettings,
     toggleDock
