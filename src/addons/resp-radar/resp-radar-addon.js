@@ -9,7 +9,7 @@
 // =============================================================================
 
 const ADDON_NAME = 'resp-radar';
-const ADDON_BUILD = '2026-04-26-minimal-v1';
+const ADDON_BUILD = '2026-04-26-minimal-v2';
 
 // Debug logging
 const RZP_DEBUG = true;
@@ -559,7 +559,10 @@ function refreshView() {
                 minSeconds = lootlogTimer.minRemainingSeconds || 0;
             }
             
-            rzpLog(`Render: "${npcName}" -> ${totalSeconds}s (maxSpawnTime: ${lootlogTimer.maxSpawnTime}, minSpawnTime: ${lootlogTimer.minSpawnTime})`);
+            rzpLog(`Render: "${npcName}" -> ${totalSeconds}s remaining`);
+            rzpLog(`  maxSpawnTime: ${lootlogTimer.maxSpawnTime} (${typeof lootlogTimer.maxSpawnTime})`);
+            rzpLog(`  minSpawnTime: ${lootlogTimer.minSpawnTime} (${typeof lootlogTimer.minSpawnTime})`);
+            rzpLog(`  remainingSeconds: ${lootlogTimer.remainingSeconds}, minRemainingSeconds: ${lootlogTimer.minRemainingSeconds}`);
             
             let timerColor = '#00ff88';
             let labelText = 'respi za';
