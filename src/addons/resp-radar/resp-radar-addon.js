@@ -500,16 +500,30 @@ function refreshView() {
     
     npcNames.forEach((npcName) => {
         let lootlogTimer = null;
+        let matchType = 'none';
         
         // Try exact match first
         if (state.lootlogTimers[npcName]) {
             lootlogTimer = state.lootlogTimers[npcName];
+            matchType = 'exact';
+            rzpLog(`Match: "${npcName}" -> EXACT MATCH found`);
         } else {
             // Try fuzzy match
             for (const key in state.lootlogTimers) {
                 if (key.includes(npcName) || npcName.includes(key)) {
                     lootlogTimer = state.lootlogTimers[key];
+                    matchType = 'fuzzy';
+                    rzpLog(`Match: "${npcName}" -> FUZZY MATCH found: "${key}"`);
                     break;
+                }
+            }
+            
+            if (!lootlogTimer) {
+                rzpLog(`Match: "${npcName}" -> NO MATCH (available: ${Object.keys(state.lootlogTimers).length} timers)`);
+                // Debug: show first 5 available timer names
+                const available = Object.keys(state.lootlogTimers).slice(0, 5);
+                if (available.length > 0) {
+                    rzpLog(`  Available samples: ${available.join(', ')}`);
                 }
             }
         }
@@ -660,8 +674,15 @@ function tickTimers() {
 function onStorageChange(e) {
     // Storage event listener - main trigger from Iledoe2
     if (e.key === null || isLootlogStorageKey(e.key)) {
-        rzpLog('Storage: Detected change in Lootlog storage, refreshing...');
+        const timerCountBefore = Object.keys(state.lootlogTimers).length;
+        rzpLog(`Storage: EVENT detected - key="${e.key}", oldValue=${e.oldValue?.length || 0} chars, newValue=${e.newValue?.length || 0} chars`);
+        rzpLog(`Storage: Timers before fetch: ${timerCountBefore}`);
+        
         fetchLootlogTimers();
+        
+        const timerCountAfter = Object.keys(state.lootlogTimers).length;
+        rzpLog(`Storage: Timers after fetch: ${timerCountAfter} (change: ${timerCountAfter - timerCountBefore})`);
+        
         // Refresh view immediately after fetching new timers
         const mapName = getCurrentMapName();
         if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
@@ -676,8 +697,14 @@ function checkStorageFingerprint() {
     try {
         const newHash = getLootlogStorageFingerprint();
         if (newHash && state.lastStorageFingerprint && state.lastStorageFingerprint !== newHash) {
-            rzpLog('Storage: Fingerprint changed, refreshing...');
+            const timerCountBefore = Object.keys(state.lootlogTimers).length;
+            rzpLog(`Storage: FINGERPRINT changed! Timers before: ${timerCountBefore}`);
+            
             fetchLootlogTimers();
+            
+            const timerCountAfter = Object.keys(state.lootlogTimers).length;
+            rzpLog(`Storage: Timers after: ${timerCountAfter} (change: ${timerCountAfter - timerCountBefore})`);
+            
             // Refresh view immediately
             const mapName = getCurrentMapName();
             if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
