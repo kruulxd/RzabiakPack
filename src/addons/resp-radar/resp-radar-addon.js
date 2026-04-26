@@ -370,14 +370,16 @@
               maxSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
             }
           }
-          // Poprawiona logika: tylko jeden komunikat na raz
           if (minSeconds > 0) {
-            labelText = 'rozpoczyna respa za';
+            // Cooldown - czas do minimalnego respa
+            labelText = 'zaczyna respić za';
             timeValue = formatTime(minSeconds);
-          } else if (minSeconds === 0 && maxSeconds > 0) {
+          } else if (maxSeconds > 0) {
+            // Okno respa - czas do maksymalnego respa
             labelText = 'respi jeszcze przez';
             timeValue = formatTime(maxSeconds);
-          } else if (minSeconds === 0 && maxSeconds === 0) {
+          } else {
+            // Timer na 00:00 - zrespił
             labelText = 'zrespił';
             timeValue = '';
           }
@@ -444,25 +446,23 @@
           }
         }
 
-        el.textContent = formatTime(remainingSeconds);
+        const parentDiv = el.closest('.timer-row');
+        const labelSpan = parentDiv ? parentDiv.querySelector('.timer-label') : null;
 
-        const mapName = getCurrentMapName();
-        if (mapName && TITAN_DATA[mapName]) {
-          const parentDiv = el.closest('.timer-row');
-          const labelSpan = parentDiv.querySelector('.timer-label');
-
-          if (minRemainingSeconds > 0) {
-            el.style.color = '#fff';
-            if (labelSpan) labelSpan.textContent = 'respi za';
-          } else {
-            el.style.color = '#ffa500';
-            if (labelSpan) labelSpan.textContent = 'respi jeszcze przez';
-          }
-        }
-
-        if (remainingSeconds <= 0) {
-          el.textContent = 'ZRESPIŁ/A';
-          el.style.color = '#00ff88';
+        if (minRemainingSeconds > 0) {
+          // Cooldown - pokazujemy czas do minimalnego respa
+          el.textContent = formatTime(minRemainingSeconds);
+          el.style.color = '#fff';
+          if (labelSpan) labelSpan.textContent = 'zaczyna respić za';
+        } else if (remainingSeconds > 0) {
+          // Okno respa - pokazujemy czas do maksymalnego respa
+          el.textContent = formatTime(remainingSeconds);
+          el.style.color = '#ffa500';
+          if (labelSpan) labelSpan.textContent = 'respi jeszcze przez';
+        } else {
+          // Timer wygasł - odśwież widok, który wyświetli "zrespił"
+          refreshView();
+          return;
         }
       }
     });
