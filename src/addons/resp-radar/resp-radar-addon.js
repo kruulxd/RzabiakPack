@@ -352,8 +352,10 @@
           const now = Date.now();
           let minSeconds = 0;
           let maxSeconds = 0;
+          let minTime = null;
+          let maxTime = null;
           if (lootlogTimer.minSpawnTime) {
-            const minTime = typeof lootlogTimer.minSpawnTime === 'number'
+            minTime = typeof lootlogTimer.minSpawnTime === 'number'
               ? lootlogTimer.minSpawnTime
               : Date.parse(lootlogTimer.minSpawnTime);
             if (minTime) {
@@ -361,21 +363,22 @@
             }
           }
           if (lootlogTimer.maxSpawnTime) {
-            const maxTime = typeof lootlogTimer.maxSpawnTime === 'number'
+            maxTime = typeof lootlogTimer.maxSpawnTime === 'number'
               ? lootlogTimer.maxSpawnTime
               : Date.parse(lootlogTimer.maxSpawnTime);
             if (maxTime) {
               maxSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
             }
           }
+          // Nowa logika komunikatu:
           if (minSeconds > 0) {
             labelText = 'rozpoczyna respa za';
             timeValue = formatTime(minSeconds);
           } else if (maxSeconds > 0) {
             labelText = 'respi jeszcze przez';
             timeValue = formatTime(maxSeconds);
-          } else {
-            labelText = 'ZRESPIŁ/A';
+          } else if (minSeconds === 0 && maxSeconds === 0) {
+            labelText = 'zrespił';
             timeValue = '';
           }
           html += `
@@ -391,7 +394,7 @@
             <div class="timer-row">
               <span class="timer-name${titan ? ' titan' : ' elite2'}">${npcName}</span>
               <span class="timer-sep">-</span>
-              <span class="timer-empty">brak na timerze</span>
+              <span class="timer-empty">brak timera na lootlogu</span>
             </div>
           `;
         }
