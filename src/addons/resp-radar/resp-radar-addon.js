@@ -703,6 +703,16 @@
     state.lootlogStorageSignature = '';
   }
 
+  // Returns true if Lootlog is installed and active in this browser session.
+  // Used to decide whether stale cache should be skipped and minutnik DOM fallback enabled.
+  function isLootlogAvailable() {
+    // Lootlog extension injects this API object at page load when installed.
+    if (typeof window.lootlogGameClientApi !== 'undefined' && window.lootlogGameClientApi !== null) return true;
+    // Network hook captured real timer data from Lootlog this session.
+    if (state.networkMeta.capturedAt > 0) return true;
+    return false;
+  }
+
   function isTimerLikeArray(node) {
     if (!Array.isArray(node) || node.length === 0) return false;
 
@@ -2205,6 +2215,16 @@
         return;
       }
 
+      // If Lootlog is not installed (API absent, no network data captured) and warmup has passed,
+      // skip stale cached timers from previous sessions. Minutnik DOM will be used as fallback in render.
+      const pastWarmup = now > state.warmupUntil;
+      if (pastWarmup && !isLootlogAvailable()) {
+        state.lootlogTimers = {};
+        state.warmupUntil = 0;
+        state.diagnostics.source = 'lootlog-unavailable';
+        return;
+      }
+
       if (hasActivePersistedTimers && persistedTimerCount > 0) {
         state.lootlogTimers = fromPersisted;
         state.warmupUntil = 0;
@@ -2650,8 +2670,10 @@
 
     npcNames.forEach((npcName, index) => {
       const timerFromState = getTimerForNpcName(npcName, state.lootlogTimers);
-      const timerFromMinuteWindow = getMinuteWindowTimerForNpc(npcName);
-      const timer = timerFromMinuteWindow || timerFromState || null;
+      // Use minutnik DOM only when Lootlog is confirmed unavailable (not installed this session).
+      // Never prefer minutnik time over Lootlog data.
+      const lootlogUnavailable = state.diagnostics.source === 'lootlog-unavailable';
+      const timer = timerFromState || (lootlogUnavailable ? getMinuteWindowTimerForNpc(npcName) : null);
 
       if (timer) matchedCount += 1;
 
