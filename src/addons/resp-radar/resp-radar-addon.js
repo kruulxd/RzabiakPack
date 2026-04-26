@@ -530,9 +530,36 @@ function refreshView() {
         
         const nameColor = npcType === 'TITAN' ? '#ff3333' : '#ff6b9d';
         
-        if (lootlogTimer && lootlogTimer.remainingSeconds !== undefined) {
-            const totalSeconds = lootlogTimer.remainingSeconds;
-            const minSeconds = lootlogTimer.minRemainingSeconds || 0;
+        if (lootlogTimer) {
+            // Calculate remaining time from timestamps (like tickTimers does)
+            const now = Date.now();
+            let totalSeconds = 0;
+            let minSeconds = 0;
+            
+            if (lootlogTimer.maxSpawnTime) {
+                const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
+                    ? lootlogTimer.maxSpawnTime 
+                    : Date.parse(lootlogTimer.maxSpawnTime);
+                if (maxTime) {
+                    totalSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+                }
+            } else {
+                // Fallback to stored remainingSeconds
+                totalSeconds = lootlogTimer.remainingSeconds || 0;
+            }
+            
+            if (lootlogTimer.minSpawnTime) {
+                const minTime = typeof lootlogTimer.minSpawnTime === 'number'
+                    ? lootlogTimer.minSpawnTime
+                    : Date.parse(lootlogTimer.minSpawnTime);
+                if (minTime) {
+                    minSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+                }
+            } else {
+                minSeconds = lootlogTimer.minRemainingSeconds || 0;
+            }
+            
+            rzpLog(`Render: "${npcName}" -> ${totalSeconds}s (maxSpawnTime: ${lootlogTimer.maxSpawnTime}, minSpawnTime: ${lootlogTimer.minSpawnTime})`);
             
             let timerColor = '#00ff88';
             let labelText = 'respi za';
