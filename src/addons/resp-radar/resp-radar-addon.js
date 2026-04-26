@@ -9,7 +9,7 @@
 // =============================================================================
 
 const ADDON_NAME = 'resp-radar';
-const ADDON_BUILD = '2026-04-26-minimal-v2';
+const ADDON_BUILD = '2026-04-26-minimal-v3';
 
 // Debug logging
 const RZP_DEBUG = true;
@@ -766,13 +766,13 @@ function enable() {
     // Initial fetch
     fetchLootlogTimers();
     
-    // Storage event listener (main trigger)
+    // Storage event listener (main trigger - NOTE: doesn't work in same window!)
     window.addEventListener('storage', onStorageChange);
-    rzpLog('Attached storage event listener');
+    rzpLog('Attached storage event listener (NOTE: only works for OTHER tabs/windows)');
     
-    // Fingerprint polling (backup trigger - every 10s)
-    state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 10000);
-    rzpLog('Started fingerprint polling (10s)');
+    // Fingerprint polling (PRIMARY trigger - every 2s because storage event doesn't work in same window)
+    state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 2000);
+    rzpLog('Started fingerprint polling (2s) - PRIMARY TRIGGER');
     
     // Timer refresh polling (every 20s)
     state.timerRefreshIntervalId = setInterval(fetchLootlogTimers, 20000);
