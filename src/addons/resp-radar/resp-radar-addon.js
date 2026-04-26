@@ -343,18 +343,15 @@
           }
         }
         const titan = npcType === 'TITAN';
+        let labelText = '';
+        let valueClass = 'timer-value';
+        let timeValue = '';
+        if (titan) valueClass += ' titan';
+        else valueClass += ' elite2';
         if (lootlogTimer) {
           const now = Date.now();
-          let totalSeconds = 0;
           let minSeconds = 0;
-          if (lootlogTimer.maxSpawnTime) {
-            const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
-              ? lootlogTimer.maxSpawnTime 
-              : Date.parse(lootlogTimer.maxSpawnTime);
-            if (maxTime) {
-              totalSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
-            }
-          }
+          let maxSeconds = 0;
           if (lootlogTimer.minSpawnTime) {
             const minTime = typeof lootlogTimer.minSpawnTime === 'number'
               ? lootlogTimer.minSpawnTime
@@ -363,28 +360,36 @@
               minSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
             }
           }
-          let labelText = 'respi za';
-          let valueClass = 'timer-value';
-          if (titan) {
-            if (minSeconds > 0) {
-              labelText = 'respi za';
-            } else {
-              labelText = 'respi jeszcze przez';
+          if (lootlogTimer.maxSpawnTime) {
+            const maxTime = typeof lootlogTimer.maxSpawnTime === 'number'
+              ? lootlogTimer.maxSpawnTime
+              : Date.parse(lootlogTimer.maxSpawnTime);
+            if (maxTime) {
+              maxSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
             }
-            valueClass += ' titan';
+          }
+          if (minSeconds > 0) {
+            labelText = 'rozpoczyna respa za';
+            timeValue = formatTime(minSeconds);
+          } else if (maxSeconds > 0) {
+            labelText = 'respi jeszcze przez';
+            timeValue = formatTime(maxSeconds);
+          } else {
+            labelText = 'ZRESPIŁ/A';
+            timeValue = '';
           }
           html += `
             <div class="timer-row">
-              <span class="timer-name${titan ? ' titan' : ''}\">${npcName}</span>
+              <span class="timer-name${titan ? ' titan' : ' elite2'}">${npcName}</span>
               <span class="timer-sep">-</span>
               <span class="timer-label">${labelText}</span>
-              <span data-npc="${npcName}" class="${valueClass}\">${formatTime(totalSeconds)}</span>
+              <span data-npc="${npcName}" class="${valueClass}">${timeValue}</span>
             </div>
           `;
         } else {
           html += `
             <div class="timer-row">
-              <span class="timer-name${titan ? ' titan' : ''}\">${npcName}</span>
+              <span class="timer-name${titan ? ' titan' : ' elite2'}">${npcName}</span>
               <span class="timer-sep">-</span>
               <span class="timer-empty">brak na timerze</span>
             </div>
@@ -497,8 +502,8 @@
         min-width: 220px;
         max-width: 400px;
         border-radius: 10px;
-        background: rgba(18,32,22,0.98);
-        box-shadow: 0 6px 32px 0 rgba(0,0,0,0.45), 0 0 0 1.5px #34d36444;
+        background: rgba(18,32,22,0.82);
+        box-shadow: 0 6px 32px 0 rgba(0,0,0,0.35), 0 0 0 1.5px #34d36444;
         color: #eafff0;
         font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
         font-size: 14px;
@@ -506,7 +511,10 @@
         user-select: none;
         pointer-events: auto;
         text-align: center;
-        opacity: 0.98;
+        opacity: 0.93;
+        backdrop-filter: blur(2px);
+        bottom: 20px !important;
+        top: auto !important;
       }
       #${CONTAINER_ID} .timer-row {
         display: flex;
@@ -518,13 +526,13 @@
       #${CONTAINER_ID} .timer-row:last-child {
         margin-bottom: 0;
       }
-      #${CONTAINER_ID} .timer-name {
-        font-weight: 700;
-        color: #ff6b9d;
-        text-shadow: 0 1px 2px #000a;
-      }
       #${CONTAINER_ID} .timer-name.titan {
         color: #ff3333;
+        text-shadow: 0 0 6px #ff3333cc, 0 1px 2px #000a;
+      }
+      #${CONTAINER_ID} .timer-name.elite2 {
+        color: #33cfff;
+        text-shadow: 0 0 6px #33cfffcc, 0 1px 2px #000a;
       }
       #${CONTAINER_ID} .timer-sep {
         color: #555;
