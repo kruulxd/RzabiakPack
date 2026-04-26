@@ -19,6 +19,7 @@
   const DATA_REFRESH_IDLE_INTERVAL_MS = 4500;
   const UI_REFRESH_INTERVAL_MS = 1000;
   const TIMER_WINDOW_TRIGGER_COOLDOWN_MS = 2500;
+  const MINUTE_WINDOW_POLL_INTERVAL_MS = 1200;
   const PERSISTED_TIMERS_CACHE_KEY = 'rzp_resp_radar_network_cache_v1';
   const PERSISTED_TIMERS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const RUNTIME_SCAN_COOLDOWN_MS = 5000;
@@ -194,6 +195,8 @@
     timerWindowObserverBound: false,
     timerWindowObserver: null,
     lastTimerWindowTriggerAt: 0,
+    minuteWindowPollIntervalId: null,
+    minuteWindowRowCount: 0,
     minuteWindowSnapshot: {},
     minuteWindowSnapshotMapName: '',
     lootlogStorageWatchIntervalId: null,
@@ -1495,6 +1498,76 @@
       .filter(Boolean);
   }
 
+  function getMinuteWindowRowCount() {
+    const selectors = [
+      '.elite-timer-wnd .npc-list .row',
+      '.window-list.elite-timer-wnd .row',
+      '.elite-timer .npc-list .row',
+      '[class*="elite-timer"] .row'
+    ];
+
+    let best = 0;
+    for (const selector of selectors) {
+      try {
+        const count = document.querySelectorAll(selector).length;
+        if (count > best) best = count;
+      } catch (error) {}
+    }
+
+    return best;
+  }
+
+  function checkMinuteWindowPollTrigger() {
+    if (!state.enabled) return;
+
+    const now = Date.now();
+    if (now - state.lastTimerWindowTriggerAt < TIMER_WINDOW_TRIGGER_COOLDOWN_MS) return;
+
+    const mapName = getCurrentMapName() || '';
+    if (state.minuteWindowSnapshotMapName !== mapName) {
+      state.minuteWindowSnapshotMapName = mapName;
+      state.minuteWindowSnapshot = {};
+      state.minuteWindowRowCount = 0;
+    }
+
+    const currentRowCount = getMinuteWindowRowCount();
+    const previousRowCount = Number(state.minuteWindowRowCount || 0);
+    const hasRowIncrease = currentRowCount > previousRowCount;
+
+    const trackedNpcNames = getTrackedNpcNamesForCurrentMap();
+    const currentSnapshot = readMinuteWindowTrackedTimers(trackedNpcNames);
+    const shouldTriggerBySnapshot = shouldTriggerFromMinuteWindowSnapshot(currentSnapshot, trackedNpcNames);
+
+    state.minuteWindowSnapshot = currentSnapshot;
+    state.minuteWindowRowCount = currentRowCount;
+
+    if (!hasRowIncrease && !shouldTriggerBySnapshot) return;
+
+    state.lastTimerWindowTriggerAt = Date.now();
+    rzpLog('MinutnikPoll: TRIGGER',
+      '| rowCount:', `${previousRowCount}->${currentRowCount}`,
+      '| snapshotTrigger:', shouldTriggerBySnapshot,
+      '| trackedNpcCount:', trackedNpcNames.length
+    );
+    scheduleForcedTimerRefresh();
+  }
+
+  function startMinuteWindowPollingTrigger() {
+    if (state.minuteWindowPollIntervalId) return;
+    state.minuteWindowRowCount = getMinuteWindowRowCount();
+    state.minuteWindowPollIntervalId = setInterval(
+      checkMinuteWindowPollTrigger,
+      MINUTE_WINDOW_POLL_INTERVAL_MS
+    );
+  }
+
+  function stopMinuteWindowPollingTrigger() {
+    if (!state.minuteWindowPollIntervalId) return;
+    clearInterval(state.minuteWindowPollIntervalId);
+    state.minuteWindowPollIntervalId = null;
+    state.minuteWindowRowCount = 0;
+  }
+
   function nodeLooksLikeNpcTimerEntry(node, trackedNpcNames) {
     if (!node || !trackedNpcNames.length) return false;
     const normalizedText = normalizeNpcName(extractNodeText(node, 2400));
@@ -1599,6 +1672,8 @@
   function disableTimerWindowRefreshHook() {
     clearForcedRefreshTimeouts();
     stopLootlogStorageWatcher();
+    stopMinuteWindowPollingTrigger();
+    state.minuteWindowRowCount = 0;
     state.minuteWindowSnapshot = {};
     state.minuteWindowSnapshotMapName = '';
     if (!state.timerWindowObserverBound) return;
@@ -2889,6 +2964,7 @@
       ensureNetworkTimerHook();
       startLootlogStorageWatcher();
       enableTimerWindowRefreshHook();
+      startMinuteWindowPollingTrigger();
       ensureStyle();
       enableResizeRefresh();
       startLoop();
