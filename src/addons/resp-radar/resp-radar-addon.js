@@ -554,10 +554,32 @@ function refreshView() {
     
     html += `</div>`;
     
-    const container = document.getElementById('rzp-resp-radar-container');
+    let container = document.getElementById('rzp-resp-radar-container');
+    if (!container) {
+        rzpLog('WARNING: Container #rzp-resp-radar-container NOT FOUND - creating it now');
+        // Create container if it doesn't exist
+        container = document.createElement('div');
+        container.id = 'rzp-resp-radar-container';
+        container.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid #444;
+            border-radius: 8px;
+            z-index: 99999;
+            min-width: 250px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        `;
+        document.body.appendChild(container);
+        rzpLog('Container created and appended to body');
+    }
+    
     if (container) {
         container.innerHTML = html;
         container.style.display = 'block';
+        rzpLog(`Container updated with HTML (${npcNames.length} NPC(s))`);
     }
 }
 
