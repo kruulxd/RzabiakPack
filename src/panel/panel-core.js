@@ -127,8 +127,9 @@
       name: 'Timer z danej lokacji',
       description: 'Timer respu E2 i Tytana pokazany w oknie gry.',
       dockIcon: '⏱',
-      dockTitle: 'Timer z danej lokacji',
+      dockTitle: 'Timer z danej lokacji - ustawienia',
       requiredInterface: 'NI',
+      showInDock: true,
       hasSettings: true
     },
     {

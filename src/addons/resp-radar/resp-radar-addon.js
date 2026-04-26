@@ -1,40 +1,54 @@
-// =============================================================================
-// RESP-RADAR ADDON - API VERSION (using Lootlog Public API)
-// =============================================================================
-// Architecture:
-// 1. PRIMARY: Read timers from window.lootlogGameClientApi.getTimers() 
-// 2. FALLBACK: Read from localStorage if API unavailable
-// 3. Use api.subscribe('timers:changed', ...) for real-time updates
-// 4. Render timer in panel div
-// =============================================================================
+(function () {
+  'use strict';
 
-const ADDON_NAME = 'resp-radar';
-const ADDON_BUILD = '2026-04-26-api-v4';
+  if (window.__RZP_RESP_RADAR_LOADED) return;
+  window.__RZP_RESP_RADAR_LOADED = true;
 
-// Debug logging
-const RZP_DEBUG = true;
-window.__RZP_RADAR_LOGS = [];
-window.__RZP_RADAR_BUILD = ADDON_BUILD;
+  const ADDON_ID = 'resp-radar';
+  const STYLE_ID = 'rzp-resp-radar-style';
+  const SETTINGS_ID = 'rzp-resp-radar-settings';
+  const DOCK_ID = 'rzp-resp-radar-dock';
+  const CONTAINER_ID = 'rzp-resp-radar-container';
+  const STORAGE_KEY_POSITION = 'rzp_resp_radar_position';
+  const DEFAULT_POSITION = 'top-right';
 
-function rzpLog(...args) {
-    const msg = `[RespRadar/${ADDON_BUILD}] ${args.join(' ')}`;
-    if (RZP_DEBUG) {
-        console.warn(msg);
+  const POSITIONS = {
+    'top-left': { top: '80px', left: '10px', right: 'auto', bottom: 'auto', label: 'Góra - Lewo' },
+    'top-right': { top: '80px', right: '10px', left: 'auto', bottom: 'auto', label: 'Góra - Prawo' },
+    'bottom-left': { bottom: '10px', left: '10px', right: 'auto', top: 'auto', label: 'Dół - Lewo' },
+    'bottom-right': { bottom: '10px', right: '10px', left: 'auto', top: 'auto', label: 'Dół - Prawo' }
+  };
+
+  /* --- State ------------------------------------------------ */
+  const state = {
+    enabled: false,
+    currentMapName: null,
+    lootlogTimers: {},
+    currentWorld: 'arkantes',
+    timerRefreshIntervalId: null,
+    mapCheckIntervalId: null,
+    tickIntervalId: null,
+    apiUnsubscribe: null,
+    position: DEFAULT_POSITION
+  };
+
+  /* --- Storage ----------------------------------------------- */
+  function loadPosition() {
+    try {
+      return localStorage.getItem(STORAGE_KEY_POSITION) || DEFAULT_POSITION;
+    } catch (e) {
+      return DEFAULT_POSITION;
     }
-    window.__RZP_RADAR_LOGS.push({
-        timestamp: Date.now(),
-        message: msg
-    });
-    if (window.__RZP_RADAR_LOGS.length > 200) {
-        window.__RZP_RADAR_LOGS.shift();
-    }
-}
+  }
 
-// =============================================================================
-// ELITE/TITAN DATA
-// =============================================================================
+  function savePosition(position) {
+    try {
+      localStorage.setItem(STORAGE_KEY_POSITION, position);
+    } catch (e) {}
+  }
 
-const ELITE_II_DATA = {
+  /* --- Elite/Titan Data ------------------------------------- */
+  const ELITE_II_DATA = {
     'Grota Dzikiego Kota': 'Mushita',
     'Las Tropicieli': 'Kotołak Tropiciel',
     'Przeklęta Strażnica - podziemia p.2 s.1': 'Shae Phu',
@@ -130,9 +144,9 @@ const ELITE_II_DATA = {
     'Sala Lodowej Magii': 'Artenius',
     'Sala Mroźnych Strzał': 'Furion',
     'Sala Mroźnych Szeptów': 'Zorin'
-};
+  };
 
-const TITAN_DATA = {
+  const TITAN_DATA = {
     'Migotliwa Pieczara': 'Dziewicza Orlica',
     'Grota Caerbannoga - leże bestii': 'Zabójczy Królik',
     'Bandyckie Chowisko - skarbiec': 'Renegat Baulus',
@@ -144,832 +158,677 @@ const TITAN_DATA = {
     'Teotihuacan': 'Tezcatlipoca',
     'Sala Zrujnowanej Świątyni': 'Barbatos Smoczy Strażnik',
     'Sala Tronowa': 'Tanroth'
-};
+  };
 
-// =============================================================================
-// LOOTLOG PARSING (from Iledoe2 working version)
-// =============================================================================
-
-function safeJsonParse(value) {
+  /* --- Lootlog Parsing ---------------------------------------- */
+  function safeJsonParse(value) {
     if (typeof value !== 'string') return null;
     try {
-        return JSON.parse(value);
+      return JSON.parse(value);
     } catch (e) {
-        return null;
+      return null;
     }
-}
+  }
 
-function toTimestamp(value) {
+  function toTimestamp(value) {
     if (value === null || value === undefined) return null;
-
     if (typeof value === 'number' && Number.isFinite(value)) {
-        if (value > 1000000000000) return value;
-        if (value > 1000000000) return value * 1000;
-        return null;
+      if (value > 1000000000000) return value;
+      if (value > 1000000000) return value * 1000;
+      return null;
     }
-
     if (typeof value === 'string') {
-        const numeric = Number(value);
-        if (Number.isFinite(numeric)) {
-            return toTimestamp(numeric);
-        }
-        const parsed = Date.parse(value);
-        return Number.isFinite(parsed) ? parsed : null;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return toTimestamp(numeric);
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
     }
-
     return null;
-}
+  }
 
-function normalizeNpcType(rawType) {
+  function normalizeNpcType(rawType) {
     if (!rawType || typeof rawType !== 'string') return null;
     const type = rawType.toUpperCase();
     if (type.includes('ELITE2')) return 'ELITE2';
     if (type.includes('TITAN')) return 'TITAN';
     return null;
-}
+  }
 
-function isLootlogStorageKey(key) {
-    if (!key || typeof key !== 'string') return false;
-    if (key === 'll:query-cache') return true;
-    if (key.startsWith('ll:')) return true;
-    return /lootlog|guild-timers|query-cache|timers?/i.test(key);
-}
-
-function getLootlogStorageEntries() {
-    const entries = [];
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!isLootlogStorageKey(key)) continue;
-            const value = localStorage.getItem(key);
-            if (typeof value !== 'string' || value.length < 2) continue;
-            entries.push([key, value]);
-        }
-    } catch (e) {
-        rzpLog('ERROR getting localStorage entries:', e);
-    }
-
-    entries.sort((a, b) => {
-        if (a[0] === 'll:query-cache') return -1;
-        if (b[0] === 'll:query-cache') return 1;
-        return a[0].localeCompare(b[0]);
-    });
-
-    return entries;
-}
-
-function getLootlogStorageFingerprint() {
-    try {
-        const entries = getLootlogStorageEntries();
-        if (!entries.length) return '';
-        return entries
-            .map(([key, value]) => `${key}:${value.length}:${value.slice(0, 120)}`)
-            .join('|');
-    } catch (e) {
-        return '';
-    }
-}
-
-function collectGuildTimerArrays(root, world) {
-    const arrays = [];
-    const seen = new WeakSet();
-
-    function visit(node) {
-        if (!node || typeof node !== 'object') return;
-        if (seen.has(node)) return;
-        seen.add(node);
-
-        if (Array.isArray(node)) {
-            node.forEach(visit);
-            return;
-        }
-
-        const queryKey = node.queryKey;
-        if (Array.isArray(queryKey) && queryKey[0] === 'guild-timers') {
-            const queryWorld = String(queryKey[1] || '').toLowerCase();
-            if (!world || !queryWorld || queryWorld === world) {
-                const data = node.state?.data ?? node.data ?? node.payload?.data;
-                if (Array.isArray(data)) {
-                    arrays.push(data);
-                }
-            }
-        }
-
-        if (typeof node.state === 'string') {
-            const parsedState = safeJsonParse(node.state);
-            if (parsedState) visit(parsedState);
-        }
-        if (typeof node.clientState === 'string') {
-            const parsedClientState = safeJsonParse(node.clientState);
-            if (parsedClientState) visit(parsedClientState);
-        }
-
-        Object.values(node).forEach(visit);
-    }
-
-    visit(root);
-    return arrays;
-}
-
-function normalizeTimerEntry(timer, now) {
-    if (!timer || typeof timer !== 'object') return null;
-
-    const npc = timer.npc || timer.mob || timer.monster || timer.entity || {};
-    const type = normalizeNpcType(
-        npc.type || timer.type || timer.npcType || timer.mobType || timer.kind
-    );
-    const name =
-        npc.name || timer.name || timer.npcName || timer.mobName || timer.entityName || null;
-
-    if (!type || !name) return null;
-
-    let minRaw =
-        timer.minSpawnTime ??
-        timer.minRespawnTime ??
-        timer.minRespTime ??
-        timer.minTime ??
-        timer.respawnFrom;
-    let maxRaw =
-        timer.maxSpawnTime ??
-        timer.maxRespawnTime ??
-        timer.maxRespTime ??
-        timer.maxTime ??
-        timer.respawnTo ??
-        timer.spawnTime;
-
-    let minTime = toTimestamp(minRaw);
-    let maxTime = toTimestamp(maxRaw);
-
-    if (maxTime === null) {
-        const remaining = Number(timer.remainingSeconds ?? timer.remaining ?? timer.timeLeft);
-        if (Number.isFinite(remaining) && remaining >= 0) {
-            maxTime = now + remaining * 1000;
-        }
-    }
-
-    if (minTime === null) {
-        minTime = maxTime;
-    }
-
-    if (maxTime === null) {
-        return null;
-    }
-
-    return {
-        name,
-        type,
-        remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
-        minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
-        minSpawnTime: minRaw ?? null,
-        maxSpawnTime: maxRaw ?? null,
-        location: npc.location || timer.location || null,
-        addedByName:
-            timer.member?.name ||
-            timer.addedByName ||
-            timer.addedBy?.name ||
-            timer.author?.name ||
-            null
-    };
-}
-
-function parseTimersFromLootlogStorage(world) {
-    const now = Date.now();
-    const parsedTimers = {};
-
-    const entries = getLootlogStorageEntries();
-    rzpLog(`Storage: Found ${entries.length} Lootlog entries`);
-
-    for (const [key, rawValue] of entries) {
-        const parsed = safeJsonParse(rawValue);
-        if (!parsed) continue;
-
-        const roots = [parsed];
-        if (typeof parsed.state === 'string') {
-            const parsedState = safeJsonParse(parsed.state);
-            if (parsedState) roots.push(parsedState);
-        }
-        if (typeof parsed.clientState === 'string') {
-            const parsedClientState = safeJsonParse(parsed.clientState);
-            if (parsedClientState) roots.push(parsedClientState);
-        }
-
-        for (const root of roots) {
-            const timerArrays = collectGuildTimerArrays(root, world);
-            for (const timers of timerArrays) {
-                timers.forEach((timer) => {
-                    const normalized = normalizeTimerEntry(timer, now);
-                    if (!normalized) return;
-
-                    const existing = parsedTimers[normalized.name];
-                    if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
-                        parsedTimers[normalized.name] = normalized;
-                    }
-                });
-            }
-        }
-    }
-
-    rzpLog(`Storage: Parsed ${Object.keys(parsedTimers).length} timers`);
-    return parsedTimers;
-}
-
-function parseTimersFromAPI(world) {
-    // NEW: Use Lootlog Public API as primary source
+  function parseTimersFromAPI(world) {
     const now = Date.now();
     const parsedTimers = {};
 
     try {
-        const api = window.lootlogGameClientApi;
-        if (!api || !api.getTimers) {
-            rzpLog('API: window.lootlogGameClientApi NOT available - falling back to localStorage');
-            return null;
+      const api = window.lootlogGameClientApi;
+      if (!api || !api.getTimers || !api.ready) return null;
+
+      const timers = api.getTimers({ world });
+      if (!timers || !Array.isArray(timers)) return null;
+
+      timers.forEach((timer) => {
+        if (!timer || typeof timer !== 'object') return;
+
+        const npc = timer.npc;
+        if (!npc) return;
+
+        const type = normalizeNpcType(npc.type);
+        const name = npc.name;
+
+        if (!type || !name) return;
+
+        let minTime = toTimestamp(timer.minSpawnTime);
+        let maxTime = toTimestamp(timer.maxSpawnTime);
+
+        if (maxTime === null) return;
+        if (minTime === null) minTime = maxTime;
+
+        const normalized = {
+          name,
+          type,
+          remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
+          minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
+          minSpawnTime: timer.minSpawnTime,
+          maxSpawnTime: timer.maxSpawnTime,
+          location: npc.location || null,
+          addedByName: timer.member?.name || null
+        };
+
+        const existing = parsedTimers[name];
+        if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
+          parsedTimers[name] = normalized;
         }
+      });
 
-        if (!api.ready) {
-            rzpLog('API: Not ready yet');
-            return null;
-        }
+      return parsedTimers;
+    } catch (e) {
+      return null;
+    }
+  }
 
-        const timers = api.getTimers({ world });
-        if (!timers || !Array.isArray(timers)) {
-            rzpLog('API: getTimers() returned no data');
-            return null;
-        }
+  /* --- Game Utilities ---------------------------------------- */
+  function getWorld() {
+    try {
+      if (window.Engine?.worldConfig?.name) {
+        return window.Engine.worldConfig.name.toLowerCase();
+      }
+      if (window.Engine?.worldName) {
+        return window.Engine.worldName.toLowerCase();
+      }
+      const match = window.location.hostname.match(/^(\w+)\.margonem\.pl/);
+      if (match) {
+        return match[1].toLowerCase();
+      }
+      return 'arkantes';
+    } catch (e) {
+      return 'arkantes';
+    }
+  }
 
-        rzpLog(`API: Got ${timers.length} timers from lootlogGameClientApi.getTimers({ world: '${world}' })`);
+  function getCurrentMapName() {
+    try {
+      if (window.Engine?.map?.d?.name) return window.Engine.map.d.name;
+      if (window.map?.name) return window.map.name;
+      if (window.Engine?.map?.name) return window.Engine.map.name;
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
 
-        timers.forEach((timer) => {
-            if (!timer || typeof timer !== 'object') return;
+  /* --- Core Logic --------------------------------------------- */
+  function fetchLootlogTimers() {
+    try {
+      state.lootlogTimers = {};
+      state.currentWorld = getWorld();
 
-            const npc = timer.npc;
-            if (!npc) return;
-
-            const type = normalizeNpcType(npc.type);
-            const name = npc.name;
-
-            if (!type || !name) return;
-
-            let minTime = toTimestamp(timer.minSpawnTime);
-            let maxTime = toTimestamp(timer.maxSpawnTime);
-
-            if (maxTime === null) return;
-            if (minTime === null) minTime = maxTime;
-
-            const normalized = {
-                name,
-                type,
-                remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
-                minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
-                minSpawnTime: timer.minSpawnTime,
-                maxSpawnTime: timer.maxSpawnTime,
-                location: npc.location || null,
-                addedByName: timer.member?.name || null
-            };
-
-            const existing = parsedTimers[name];
-            if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
-                parsedTimers[name] = normalized;
-            }
+      const apiTimers = parseTimersFromAPI(state.currentWorld);
+      if (apiTimers !== null) {
+        Object.values(apiTimers).forEach((timer) => {
+          state.lootlogTimers[timer.name] = timer;
         });
+      }
+    } catch (e) {}
+  }
 
-        rzpLog(`API: Parsed ${Object.keys(parsedTimers).length} timers`);
-        return parsedTimers;
-    } catch (e) {
-        rzpLog('API: ERROR parsing timers:', e);
-        return null;
-    }
-}
-
-// =============================================================================
-// GAME UTILITIES
-// =============================================================================
-
-function getWorld() {
-    try {
-        if (window.Engine?.worldConfig?.name) {
-            return window.Engine.worldConfig.name.toLowerCase();
-        }
-        if (window.Engine?.worldName) {
-            return window.Engine.worldName.toLowerCase();
-        }
-        const match = window.location.hostname.match(/^(\w+)\.margonem\.pl/);
-        if (match) {
-            return match[1].toLowerCase();
-        }
-        return 'arkantes';
-    } catch (e) {
-        return 'arkantes';
-    }
-}
-
-function getCurrentMapName() {
-    try {
-        if (window.Engine?.map?.d?.name) {
-            return window.Engine.map.d.name;
-        }
-        if (window.map?.name) {
-            return window.map.name;
-        }
-        if (window.Engine?.map?.name) {
-            return window.Engine.map.name;
-        }
-        return null;
-    } catch (e) {
-        return null;
-    }
-}
-
-// =============================================================================
-// ADDON STATE
-// =============================================================================
-
-const state = {
-    enabled: false,
-    currentMapName: null,
-    lootlogTimers: {},
-    currentWorld: 'arkantes',
-    lastStorageFingerprint: '',
-    storagePollingIntervalId: null,
-    mapCheckIntervalId: null,
-    timerRefreshIntervalId: null,
-    tickIntervalId: null,
-    apiUnsubscribe: null // NEW: for API subscription cleanup
-};
-
-// =============================================================================
-// CORE LOGIC
-// =============================================================================
-
-function fetchLootlogTimers() {
-    try {
-        state.lootlogTimers = {};
-        state.currentWorld = getWorld();
-
-        rzpLog('=== Fetching timers ===');
-        
-        // Try API first (PRIMARY)
-        const apiTimers = parseTimersFromAPI(state.currentWorld);
-        if (apiTimers !== null) {
-            Object.values(apiTimers).forEach((timer) => {
-                state.lootlogTimers[timer.name] = timer;
-            });
-            rzpLog(`FetchLootlog: Got ${Object.keys(state.lootlogTimers).length} timers from API`);
-        } else {
-            // Fallback to localStorage
-            rzpLog('FetchLootlog: API unavailable, using localStorage fallback');
-            const storageTimers = parseTimersFromLootlogStorage(state.currentWorld);
-            Object.values(storageTimers).forEach((timer) => {
-                state.lootlogTimers[timer.name] = timer;
-            });
-            rzpLog(`FetchLootlog: Got ${Object.keys(state.lootlogTimers).length} timers from localStorage`);
-        }
-        
-        // Debug: print timer names
-        if (Object.keys(state.lootlogTimers).length > 0) {
-            rzpLog('Timers:', Object.keys(state.lootlogTimers).join(', '));
-        }
-        
-    } catch (e) {
-        rzpLog('ERROR fetching Lootlog timers:', e);
-    }
-}
-
-function formatTime(seconds) {
+  function formatTime(seconds) {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-    
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
+  }
 
-function refreshView() {
+  function refreshView() {
     const mapName = getCurrentMapName();
-    
-    if (!mapName) {
-        rzpLog('RefreshView: No map name');
-        return;
-    }
-    
-    // Check if map changed
+    if (!mapName) return;
+
     if (mapName !== state.currentMapName) {
-        rzpLog(`RefreshView: Map changed from "${state.currentMapName}" to "${mapName}"`);
-        state.currentMapName = mapName;
+      state.currentMapName = mapName;
     }
-    
+
     const eliteData = ELITE_II_DATA[mapName];
     const titanData = TITAN_DATA[mapName];
     const npcData = eliteData || titanData;
     const npcType = titanData ? 'TITAN' : 'ELITE2';
-    
+
+    const container = document.getElementById(CONTAINER_ID);
     if (!npcData) {
-        // Not an elite/titan map - hide panel
-        const container = document.getElementById('rzp-resp-radar-container');
-        if (container) {
-            container.style.display = 'none';
-        }
-        return;
+      if (container) container.style.display = 'none';
+      return;
     }
-    
-    rzpLog(`RefreshView: On ${npcType} map: ${mapName} -> ${npcData}`);
-    
+
     const npcNames = npcData.split('/').map(n => n.trim());
-    
-    let html = `<div style="padding: 10px; font-family: Arial, sans-serif; font-size: 13px;">`;
-    
+    let html = '';
+
     npcNames.forEach((npcName) => {
-        let lootlogTimer = null;
-        let matchType = 'none';
-        
-        // Try exact match first
-        if (state.lootlogTimers[npcName]) {
-            lootlogTimer = state.lootlogTimers[npcName];
-            matchType = 'exact';
-            rzpLog(`Match: "${npcName}" -> EXACT MATCH found`);
-        } else {
-            // Try fuzzy match
-            for (const key in state.lootlogTimers) {
-                if (key.includes(npcName) || npcName.includes(key)) {
-                    lootlogTimer = state.lootlogTimers[key];
-                    matchType = 'fuzzy';
-                    rzpLog(`Match: "${npcName}" -> FUZZY MATCH found: "${key}"`);
-                    break;
-                }
-            }
-            
-            if (!lootlogTimer) {
-                rzpLog(`Match: "${npcName}" -> NO MATCH (available: ${Object.keys(state.lootlogTimers).length} timers)`);
-                // Debug: show first 5 available timer names
-                const available = Object.keys(state.lootlogTimers).slice(0, 5);
-                if (available.length > 0) {
-                    rzpLog(`  Available samples: ${available.join(', ')}`);
-                }
-            }
+      let lootlogTimer = null;
+
+      if (state.lootlogTimers[npcName]) {
+        lootlogTimer = state.lootlogTimers[npcName];
+      } else {
+        for (const key in state.lootlogTimers) {
+          if (key.includes(npcName) || npcName.includes(key)) {
+            lootlogTimer = state.lootlogTimers[key];
+            break;
+          }
         }
-        
-        const nameColor = npcType === 'TITAN' ? '#ff3333' : '#ff6b9d';
-        
-        if (lootlogTimer) {
-            // Calculate remaining time from timestamps (like tickTimers does)
-            const now = Date.now();
-            let totalSeconds = 0;
-            let minSeconds = 0;
-            
-            if (lootlogTimer.maxSpawnTime) {
-                const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
-                    ? lootlogTimer.maxSpawnTime 
-                    : Date.parse(lootlogTimer.maxSpawnTime);
-                if (maxTime) {
-                    totalSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
-                }
-            } else {
-                // Fallback to stored remainingSeconds
-                totalSeconds = lootlogTimer.remainingSeconds || 0;
-            }
-            
-            if (lootlogTimer.minSpawnTime) {
-                const minTime = typeof lootlogTimer.minSpawnTime === 'number'
-                    ? lootlogTimer.minSpawnTime
-                    : Date.parse(lootlogTimer.minSpawnTime);
-                if (minTime) {
-                    minSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
-                }
-            } else {
-                minSeconds = lootlogTimer.minRemainingSeconds || 0;
-            }
-            
-            rzpLog(`Render: "${npcName}" -> ${totalSeconds}s remaining`);
-            rzpLog(`  maxSpawnTime: ${lootlogTimer.maxSpawnTime} (${typeof lootlogTimer.maxSpawnTime})`);
-            rzpLog(`  minSpawnTime: ${lootlogTimer.minSpawnTime} (${typeof lootlogTimer.minSpawnTime})`);
-            rzpLog(`  remainingSeconds: ${lootlogTimer.remainingSeconds}, minRemainingSeconds: ${lootlogTimer.minRemainingSeconds}`);
-            
-            let timerColor = '#00ff88';
-            let labelText = 'respi za';
-            
-            if (npcType === 'TITAN') {
-                if (minSeconds > 0) {
-                    timerColor = '#fff';
-                    labelText = 'respi za';
-                } else {
-                    timerColor = '#ffa500';
-                    labelText = 'respi jeszcze przez';
-                }
-            }
-            
-            html += `
-                <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-                    <span style="color: ${nameColor}; font-weight: bold;">${npcName}</span>
-                    <span style="color: #aaa;">-</span>
-                    <span style="color: #fff;">${labelText}</span>
-                    <span data-npc="${npcName}" class="resp-timer" style="color: ${timerColor}; font-weight: bold;">${formatTime(totalSeconds)}</span>
-                </div>
-            `;
-        } else {
-            html += `
-                <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-                    <span style="color: ${nameColor}; font-weight: bold;">${npcName}</span>
-                    <span style="color: #aaa;">-</span>
-                    <span style="color: #999;">brak na timerze</span>
-                </div>
-            `;
+      }
+
+      const nameColor = npcType === 'TITAN' ? '#ff3333' : '#ff6b9d';
+
+      if (lootlogTimer) {
+        const now = Date.now();
+        let totalSeconds = 0;
+        let minSeconds = 0;
+
+        if (lootlogTimer.maxSpawnTime) {
+          const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
+            ? lootlogTimer.maxSpawnTime 
+            : Date.parse(lootlogTimer.maxSpawnTime);
+          if (maxTime) {
+            totalSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+          }
         }
-    });
-    
-    html += `</div>`;
-    
-    let container = document.getElementById('rzp-resp-radar-container');
-    if (!container) {
-        rzpLog('WARNING: Container #rzp-resp-radar-container NOT FOUND - creating it now');
-        // Create container if it doesn't exist
-        container = document.createElement('div');
-        container.id = 'rzp-resp-radar-container';
-        container.style.cssText = `
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            background: rgba(20, 20, 20, 0.9);
-            border: 1px solid #444;
-            border-radius: 8px;
-            z-index: 99999;
-            min-width: 250px;
-            max-width: 400px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+
+        if (lootlogTimer.minSpawnTime) {
+          const minTime = typeof lootlogTimer.minSpawnTime === 'number'
+            ? lootlogTimer.minSpawnTime
+            : Date.parse(lootlogTimer.minSpawnTime);
+          if (minTime) {
+            minSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+          }
+        }
+
+        let timerColor = '#00ff88';
+        let labelText = 'respi za';
+
+        if (npcType === 'TITAN') {
+          if (minSeconds > 0) {
+            timerColor = '#fff';
+            labelText = 'respi za';
+          } else {
+            timerColor = '#ffa500';
+            labelText = 'respi jeszcze przez';
+          }
+        }
+
+        html += `
+          <div class="timer-row">
+            <span class="timer-name" style="color: ${nameColor};">${npcName}</span>
+            <span class="timer-sep">-</span>
+            <span class="timer-label">${labelText}</span>
+            <span data-npc="${npcName}" class="timer-value" style="color: ${timerColor};">${formatTime(totalSeconds)}</span>
+          </div>
         `;
-        document.body.appendChild(container);
-        rzpLog('Container created and appended to body');
-    }
-    
-    if (container) {
-        container.innerHTML = html;
-        container.style.display = 'block';
-        rzpLog(`Container updated with HTML (${npcNames.length} NPC(s))`);
-    }
-}
-
-function tickTimers() {
-    // Update displayed timers every second
-    // IMPORTANT: Calculate time dynamically from timestamps, don't mutate state
-    const now = Date.now();
-    const timerElements = document.querySelectorAll('.resp-timer');
-    
-    timerElements.forEach((el) => {
-        const npcName = el.getAttribute('data-npc');
-        if (!npcName) return;
-        
-        let lootlogTimer = state.lootlogTimers[npcName];
-        if (!lootlogTimer) {
-            // Try fuzzy match
-            for (const key in state.lootlogTimers) {
-                if (key.includes(npcName) || npcName.includes(key)) {
-                    lootlogTimer = state.lootlogTimers[key];
-                    break;
-                }
-            }
-        }
-        
-        if (lootlogTimer) {
-            // Calculate remaining seconds from timestamps (don't mutate state)
-            let remainingSeconds = 0;
-            let minRemainingSeconds = 0;
-            
-            if (lootlogTimer.maxSpawnTime) {
-                const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
-                    ? lootlogTimer.maxSpawnTime 
-                    : Date.parse(lootlogTimer.maxSpawnTime);
-                if (maxTime) {
-                    remainingSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
-                }
-            } else {
-                // Fallback to stored remainingSeconds (will drift)
-                remainingSeconds = lootlogTimer.remainingSeconds || 0;
-            }
-            
-            if (lootlogTimer.minSpawnTime) {
-                const minTime = typeof lootlogTimer.minSpawnTime === 'number'
-                    ? lootlogTimer.minSpawnTime
-                    : Date.parse(lootlogTimer.minSpawnTime);
-                if (minTime) {
-                    minRemainingSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
-                }
-            } else {
-                minRemainingSeconds = lootlogTimer.minRemainingSeconds || 0;
-            }
-            
-            el.textContent = formatTime(remainingSeconds);
-            
-            // Update color for titans
-            const mapName = getCurrentMapName();
-            if (mapName && TITAN_DATA[mapName]) {
-                const parentDiv = el.closest('div');
-                const labelSpan = parentDiv.querySelector('span:nth-child(3)');
-                
-                if (minRemainingSeconds > 0) {
-                    el.style.color = '#fff';
-                    if (labelSpan) labelSpan.textContent = 'respi za';
-                } else {
-                    el.style.color = '#ffa500';
-                    if (labelSpan) labelSpan.textContent = 'respi jeszcze przez';
-                }
-            }
-            
-            if (remainingSeconds <= 0) {
-                el.textContent = 'ZRESPIŁ/A';
-                el.style.color = '#00ff88';
-            }
-        }
+      } else {
+        html += `
+          <div class="timer-row">
+            <span class="timer-name" style="color: ${nameColor};">${npcName}</span>
+            <span class="timer-sep">-</span>
+            <span class="timer-empty">brak na timerze</span>
+          </div>
+        `;
+      }
     });
-}
 
-function onStorageChange(e) {
-    // Storage event listener - main trigger from Iledoe2
-    if (e.key === null || isLootlogStorageKey(e.key)) {
-        const timerCountBefore = Object.keys(state.lootlogTimers).length;
-        rzpLog(`Storage: EVENT detected - key="${e.key}", oldValue=${e.oldValue?.length || 0} chars, newValue=${e.newValue?.length || 0} chars`);
-        rzpLog(`Storage: Timers before fetch: ${timerCountBefore}`);
-        
-        fetchLootlogTimers();
-        
-        const timerCountAfter = Object.keys(state.lootlogTimers).length;
-        rzpLog(`Storage: Timers after fetch: ${timerCountAfter} (change: ${timerCountAfter - timerCountBefore})`);
-        
-        // Refresh view immediately after fetching new timers
-        const mapName = getCurrentMapName();
-        if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
-            refreshView();
-            rzpLog('Storage: Forced refreshView() after storage change');
-        }
+    if (container) {
+      container.innerHTML = html;
+      container.style.display = 'block';
     }
-}
+  }
 
-function checkStorageFingerprint() {
-    // Fingerprint polling - backup trigger from Iledoe2
+  function tickTimers() {
+    const now = Date.now();
+    const timerElements = document.querySelectorAll('.timer-value');
+
+    timerElements.forEach((el) => {
+      const npcName = el.getAttribute('data-npc');
+      if (!npcName) return;
+
+      let lootlogTimer = state.lootlogTimers[npcName];
+      if (!lootlogTimer) {
+        for (const key in state.lootlogTimers) {
+          if (key.includes(npcName) || npcName.includes(key)) {
+            lootlogTimer = state.lootlogTimers[key];
+            break;
+          }
+        }
+      }
+
+      if (lootlogTimer) {
+        let remainingSeconds = 0;
+        let minRemainingSeconds = 0;
+
+        if (lootlogTimer.maxSpawnTime) {
+          const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
+            ? lootlogTimer.maxSpawnTime 
+            : Date.parse(lootlogTimer.maxSpawnTime);
+          if (maxTime) {
+            remainingSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+          }
+        }
+
+        if (lootlogTimer.minSpawnTime) {
+          const minTime = typeof lootlogTimer.minSpawnTime === 'number'
+            ? lootlogTimer.minSpawnTime
+            : Date.parse(lootlogTimer.minSpawnTime);
+          if (minTime) {
+            minRemainingSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+          }
+        }
+
+        el.textContent = formatTime(remainingSeconds);
+
+        const mapName = getCurrentMapName();
+        if (mapName && TITAN_DATA[mapName]) {
+          const parentDiv = el.closest('.timer-row');
+          const labelSpan = parentDiv.querySelector('.timer-label');
+
+          if (minRemainingSeconds > 0) {
+            el.style.color = '#fff';
+            if (labelSpan) labelSpan.textContent = 'respi za';
+          } else {
+            el.style.color = '#ffa500';
+            if (labelSpan) labelSpan.textContent = 'respi jeszcze przez';
+          }
+        }
+
+        if (remainingSeconds <= 0) {
+          el.textContent = 'ZRESPIŁ/A';
+          el.style.color = '#00ff88';
+        }
+      }
+    });
+  }
+
+  /* --- Styles ------------------------------------------------- */
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${CONTAINER_ID} {
+        position: fixed;
+        z-index: 18;
+        min-width: 280px;
+        max-width: 400px;
+        border-radius: 12px;
+        border: 1px solid rgba(52,211,100,0.18);
+        background: linear-gradient(160deg, rgba(6,16,9,0.98), rgba(4,12,7,0.99));
+        box-shadow:
+          0 0 0 1px rgba(34,197,94,0.06) inset,
+          0 16px 40px rgba(0,0,0,0.65),
+          0 0 24px rgba(34,197,94,0.04);
+        color: #c8ead4;
+        font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
+        font-size: 13px;
+        padding: 12px;
+        user-select: none;
+      }
+
+      #${CONTAINER_ID} .timer-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      #${CONTAINER_ID} .timer-row:last-child {
+        margin-bottom: 0;
+      }
+
+      #${CONTAINER_ID} .timer-name {
+        font-weight: 600;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      }
+
+      #${CONTAINER_ID} .timer-sep {
+        color: #555;
+      }
+
+      #${CONTAINER_ID} .timer-label {
+        color: #a0c0a8;
+      }
+
+      #${CONTAINER_ID} .timer-value {
+        font-weight: 700;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+        font-family: 'Courier New', monospace;
+      }
+
+      #${CONTAINER_ID} .timer-empty {
+        color: #666;
+        font-style: italic;
+      }
+
+      #${SETTINGS_ID} {
+        position: fixed;
+        z-index: 19;
+        min-width: 320px;
+        border-radius: 12px;
+        border: 1px solid rgba(52,211,100,0.18);
+        background: linear-gradient(160deg, rgba(6,16,9,0.98), rgba(4,12,7,0.99));
+        box-shadow:
+          0 0 0 1px rgba(34,197,94,0.06) inset,
+          0 16px 40px rgba(0,0,0,0.65),
+          0 0 24px rgba(34,197,94,0.04);
+        color: #c8ead4;
+        font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
+        font-size: 13px;
+        user-select: none;
+        display: none;
+      }
+
+      #${SETTINGS_ID} .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        background: rgba(0,0,0,0.2);
+        border-bottom: 1px solid rgba(52,211,100,0.12);
+      }
+
+      #${SETTINGS_ID} .header-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        color: #34d364;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      }
+
+      #${SETTINGS_ID} .close-btn {
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: rgba(239,68,68,0.15);
+        border: 1px solid rgba(239,68,68,0.3);
+        color: #f87171;
+        font-size: 11px;
+        font-weight: 600;
+        transition: all 0.2s;
+      }
+
+      #${SETTINGS_ID} .close-btn:hover {
+        background: rgba(239,68,68,0.25);
+        border-color: rgba(239,68,68,0.5);
+      }
+
+      #${SETTINGS_ID} .content {
+        padding: 14px;
+      }
+
+      #${SETTINGS_ID} .setting-group {
+        margin-bottom: 16px;
+      }
+
+      #${SETTINGS_ID} .setting-group:last-child {
+        margin-bottom: 0;
+      }
+
+      #${SETTINGS_ID} .setting-label {
+        display: block;
+        margin-bottom: 8px;
+        color: #a0c0a8;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      #${SETTINGS_ID} .position-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+
+      #${SETTINGS_ID} .position-btn {
+        cursor: pointer;
+        padding: 10px;
+        border-radius: 8px;
+        background: rgba(52,211,100,0.08);
+        border: 1px solid rgba(52,211,100,0.2);
+        color: #c8ead4;
+        text-align: center;
+        font-size: 12px;
+        transition: all 0.2s;
+      }
+
+      #${SETTINGS_ID} .position-btn:hover {
+        background: rgba(52,211,100,0.15);
+        border-color: rgba(52,211,100,0.35);
+      }
+
+      #${SETTINGS_ID} .position-btn.active {
+        background: rgba(52,211,100,0.25);
+        border-color: rgba(52,211,100,0.5);
+        color: #34d364;
+        font-weight: 600;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  /* --- Settings Modal ----------------------------------------- */
+  function createSettingsModal() {
+    if (document.getElementById(SETTINGS_ID)) return;
+
+    ensureStyle();
+
+    const modal = document.createElement('div');
+    modal.id = SETTINGS_ID;
+    modal.innerHTML = `
+      <div class="header">
+        <div class="header-title">
+          <span>⏱</span>
+          <span>Timer z danej lokacji - Ustawienia</span>
+        </div>
+        <div class="close-btn">✕ Zamknij</div>
+      </div>
+      <div class="content">
+        <div class="setting-group">
+          <label class="setting-label">Pozycja timera na ekranie:</label>
+          <div class="position-grid">
+            ${Object.keys(POSITIONS).map(key => `
+              <div class="position-btn" data-position="${key}">${POSITIONS[key].label}</div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Close button
+    modal.querySelector('.close-btn').addEventListener('click', closeSettings);
+
+    // Position buttons
+    modal.querySelectorAll('.position-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const position = btn.getAttribute('data-position');
+        setPosition(position);
+      });
+    });
+
+    // Update active button
+    updateActivePosition();
+  }
+
+  function openSettings() {
+    const modal = document.getElementById(SETTINGS_ID);
+    if (!modal) {
+      createSettingsModal();
+    }
+
+    const m = document.getElementById(SETTINGS_ID);
+    if (m) {
+      m.style.display = 'block';
+      m.style.top = '50%';
+      m.style.left = '50%';
+      m.style.transform = 'translate(-50%, -50%)';
+      updateActivePosition();
+    }
+  }
+
+  function closeSettings() {
+    const modal = document.getElementById(SETTINGS_ID);
+    if (modal) {
+      modal.style.display = 'none';
+    }
+  }
+
+  function updateActivePosition() {
+    const modal = document.getElementById(SETTINGS_ID);
+    if (!modal) return;
+
+    modal.querySelectorAll('.position-btn').forEach(btn => {
+      btn.classList.remove('active');
+      if (btn.getAttribute('data-position') === state.position) {
+        btn.classList.add('active');
+      }
+    });
+  }
+
+  function setPosition(position) {
+    if (!POSITIONS[position]) return;
+
+    state.position = position;
+    savePosition(position);
+    updateActivePosition();
+
+    const container = document.getElementById(CONTAINER_ID);
+    if (container) {
+      const pos = POSITIONS[position];
+      container.style.top = pos.top;
+      container.style.right = pos.right;
+      container.style.bottom = pos.bottom;
+      container.style.left = pos.left;
+    }
+  }
+
+  /* --- Container ---------------------------------------------- */
+  function ensureContainer() {
+    let container = document.getElementById(CONTAINER_ID);
+    if (!container) {
+      ensureStyle();
+
+      container = document.createElement('div');
+      container.id = CONTAINER_ID;
+      document.body.appendChild(container);
+    }
+
+    const pos = POSITIONS[state.position];
+    container.style.top = pos.top;
+    container.style.right = pos.right;
+    container.style.bottom = pos.bottom;
+    container.style.left = pos.left;
+
+    return container;
+  }
+
+  /* --- Lifecycle ---------------------------------------------- */
+  function enable() {
+    if (state.enabled) return;
+
+    state.enabled = true;
+    state.position = loadPosition();
+
+    ensureContainer();
+    fetchLootlogTimers();
+
+    // Subscribe to Lootlog API events
     try {
-        const newHash = getLootlogStorageFingerprint();
-        if (newHash && state.lastStorageFingerprint && state.lastStorageFingerprint !== newHash) {
-            const timerCountBefore = Object.keys(state.lootlogTimers).length;
-            rzpLog(`Storage: FINGERPRINT changed! Timers before: ${timerCountBefore}`);
-            
+      const api = window.lootlogGameClientApi;
+      if (api && api.subscribe) {
+        state.apiUnsubscribe = api.subscribe('timers:changed', (event) => {
+          if (event.world === state.currentWorld) {
             fetchLootlogTimers();
-            
-            const timerCountAfter = Object.keys(state.lootlogTimers).length;
-            rzpLog(`Storage: Timers after: ${timerCountAfter} (change: ${timerCountAfter - timerCountBefore})`);
-            
-            // Refresh view immediately
             const mapName = getCurrentMapName();
             if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
-                refreshView();
-                rzpLog('Storage: Forced refreshView() after fingerprint change');
+              refreshView();
             }
-        }
-        state.lastStorageFingerprint = newHash;
-    } catch (e) {
-        rzpLog('ERROR checking storage fingerprint:', e);
-    }
-}
+          }
+        });
+      }
+    } catch (e) {}
 
-function checkMapChange() {
-    refreshView();
-}
-
-// =============================================================================
-// ADDON LIFECYCLE
-// =============================================================================
-
-function enable() {
-    if (state.enabled) return;
-    
-    rzpLog('=== ADDON ENABLE ===');
-    
-    state.enabled = true;
-    
-    // Initial fetch
-    fetchLootlogTimers();
-    
-    // Try to subscribe to Lootlog API events (PRIMARY trigger)
-    try {
-        const api = window.lootlogGameClientApi;
-        if (api && api.subscribe) {
-            state.apiUnsubscribe = api.subscribe('timers:changed', (event) => {
-                rzpLog(`API: timers:changed event - world: ${event.world}, guildId: ${event.guildId}, timers: ${event.timers?.length || 0}`);
-                
-                // Only refresh if it's our world
-                if (event.world === state.currentWorld) {
-                    const timerCountBefore = Object.keys(state.lootlogTimers).length;
-                    rzpLog(`API: Event for our world (${event.world}), refreshing... Timers before: ${timerCountBefore}`);
-                    
-                    fetchLootlogTimers();
-                    
-                    const timerCountAfter = Object.keys(state.lootlogTimers).length;
-                    rzpLog(`API: Timers after: ${timerCountAfter} (change: ${timerCountAfter - timerCountBefore})`);
-                    
-                    // Refresh view immediately
-                    const mapName = getCurrentMapName();
-                    if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
-                        refreshView();
-                        rzpLog('API: Forced refreshView() after API event');
-                    }
-                }
-            });
-            rzpLog('API: Subscribed to timers:changed events (PRIMARY TRIGGER)');
-        } else {
-            rzpLog('API: window.lootlogGameClientApi.subscribe NOT available - using localStorage polling');
-            
-            // Fallback: Fingerprint polling if API not available
-            state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 2000);
-            rzpLog('Fallback: Started fingerprint polling (2s)');
-        }
-    } catch (e) {
-        rzpLog('API: ERROR subscribing to events:', e);
-        
-        // Fallback: Fingerprint polling on error
-        state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 2000);
-        rzpLog('Fallback: Started fingerprint polling (2s)');
-    }
-    
-    // Storage event listener (backup trigger - works only in other tabs/windows)
-    window.addEventListener('storage', onStorageChange);
-    rzpLog('Attached storage event listener (backup - only works for OTHER tabs/windows)');
-    
-    // Timer refresh polling (every 20s - keep existing timers fresh)
+    // Intervals
     state.timerRefreshIntervalId = setInterval(fetchLootlogTimers, 20000);
-    rzpLog('Started timer refresh polling (20s)');
-    
-    // Map check polling (every 2s)
-    state.mapCheckIntervalId = setInterval(checkMapChange, 2000);
-    rzpLog('Started map check polling (2s)');
-    
-    // Tick timers every second
+    state.mapCheckIntervalId = setInterval(refreshView, 2000);
     state.tickIntervalId = setInterval(tickTimers, 1000);
-    rzpLog('Started timer tick (1s)');
-    
-    // Initial render
-    refreshView();
-    
-    rzpLog('=== ADDON ENABLED ===');
-}
 
-function disable() {
+    refreshView();
+  }
+
+  function disable() {
     if (!state.enabled) return;
-    
-    rzpLog('=== ADDON DISABLE ===');
-    
+
     state.enabled = false;
-    
-    // Unsubscribe from API events
+
     if (state.apiUnsubscribe) {
-        try {
-            state.apiUnsubscribe();
-            state.apiUnsubscribe = null;
-            rzpLog('API: Unsubscribed from timers:changed events');
-        } catch (e) {
-            rzpLog('API: ERROR unsubscribing:', e);
-        }
+      try {
+        state.apiUnsubscribe();
+        state.apiUnsubscribe = null;
+      } catch (e) {}
     }
-    
-    // Remove storage listener
-    window.removeEventListener('storage', onStorageChange);
-    
-    // Clear intervals
-    if (state.storagePollingIntervalId) {
-        clearInterval(state.storagePollingIntervalId);
-        state.storagePollingIntervalId = null;
-    }
+
     if (state.timerRefreshIntervalId) {
-        clearInterval(state.timerRefreshIntervalId);
-        state.timerRefreshIntervalId = null;
+      clearInterval(state.timerRefreshIntervalId);
+      state.timerRefreshIntervalId = null;
     }
     if (state.mapCheckIntervalId) {
-        clearInterval(state.mapCheckIntervalId);
-        state.mapCheckIntervalId = null;
+      clearInterval(state.mapCheckIntervalId);
+      state.mapCheckIntervalId = null;
     }
     if (state.tickIntervalId) {
-        clearInterval(state.tickIntervalId);
-        state.tickIntervalId = null;
+      clearInterval(state.tickIntervalId);
+      state.tickIntervalId = null;
     }
-    
-    // Clear UI
-    const container = document.getElementById('rzp-resp-radar-container');
+
+    const container = document.getElementById(CONTAINER_ID);
     if (container) {
-        container.innerHTML = '';
-        container.style.display = 'none';
+      container.innerHTML = '';
+      container.style.display = 'none';
     }
-    
-    rzpLog('=== ADDON DISABLED ===');
-}
+  }
 
-// =============================================================================
-// REGISTRATION
-// =============================================================================
+  function toggleDock() {
+    openSettings();
+  }
 
-if (!window.RZP_ADDONS_REGISTRY) {
+  /* --- Registration ------------------------------------------- */
+  if (!window.RZP_ADDONS_REGISTRY) {
     window.RZP_ADDONS_REGISTRY = {};
-}
+  }
 
-window.RZP_ADDONS_REGISTRY[ADDON_NAME] = {
-    name: ADDON_NAME,
-    version: ADDON_BUILD,
+  window.RZP_ADDONS_REGISTRY[ADDON_ID] = {
+    name: ADDON_ID,
+    version: '2026-04-26-panel-v5',
     enable,
     disable,
-    getState: () => state
-};
+    getState: () => state,
+    openSettings,
+    closeSettings,
+    toggleDock
+  };
 
-rzpLog(`Addon registered: ${ADDON_NAME} (${ADDON_BUILD})`);
+})();
