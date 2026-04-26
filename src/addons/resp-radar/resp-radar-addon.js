@@ -370,11 +370,11 @@
               maxSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
             }
           }
-          // Nowa logika komunikatu:
+          // Poprawiona logika: tylko jeden komunikat na raz
           if (minSeconds > 0) {
             labelText = 'rozpoczyna respa za';
             timeValue = formatTime(minSeconds);
-          } else if (maxSeconds > 0) {
+          } else if (minSeconds === 0 && maxSeconds > 0) {
             labelText = 'respi jeszcze przez';
             timeValue = formatTime(maxSeconds);
           } else if (minSeconds === 0 && maxSeconds === 0) {
