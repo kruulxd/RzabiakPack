@@ -8,7 +8,7 @@
   const STORAGE_KEY = 'rzp_resp_radar_settings';
   const DEBUG_STORAGE_KEY = 'rzp_resp_radar_debug';
   const DEBUG_STORAGE_KEY_LEGACY = 'rzp-resp-radar-debug';
-  const ADDON_BUILD = '2026-04-25-message-phases-v2';
+  const ADDON_BUILD = '2026-04-26-debug-warn-v1';
   const ALL_KEYS_FALLBACK_COOLDOWN_MS = 5000;
   const NETWORK_API_POLL_COOLDOWN_MS = 8000;
   const STARTUP_WARMUP_MS = 20000;
@@ -364,7 +364,17 @@
 
   // ===== DIAGNOSTIC CONSOLE LOGGING (remove after debugging) =====
   const RZP_DEBUG = true;
-  function rzpLog(...args) { if (RZP_DEBUG) console.log('[RZP-RADAR]', ...args); }
+  function rzpLog(...args) {
+    if (!RZP_DEBUG) return;
+    console.warn('[RZP-RADAR]', ...args);
+    try {
+      window.__RZP_RADAR_LOGS = window.__RZP_RADAR_LOGS || [];
+      window.__RZP_RADAR_LOGS.push({ at: Date.now(), args });
+      if (window.__RZP_RADAR_LOGS.length > 300) {
+        window.__RZP_RADAR_LOGS.splice(0, window.__RZP_RADAR_LOGS.length - 300);
+      }
+    } catch (error) {}
+  }
   // ===============================================================
 
   function loadSettings() {
@@ -1541,6 +1551,22 @@
             isLikelyTimerWindowNode(candidateNode) ||
             (typeof candidateNode.closest === 'function' && Boolean(candidateNode.closest('[id*="timer" i], [class*="timer" i], [class*="minut" i], [class*="lootlog" i], [class*="elite" i]')));
           if (!isLikelyWindowMutation) continue;
+
+          // Primary trigger: any added row in minutnik list means timers changed.
+          if (mutation.type === 'childList' && mutation.addedNodes?.length) {
+            const hasRowNode = Array.from(mutation.addedNodes).some((added) => {
+              const addedEl = added?.nodeType === 1 ? added : added?.parentElement;
+              if (!addedEl || typeof addedEl.closest !== 'function') return false;
+              return Boolean(addedEl.closest('.elite-timer-wnd .npc-list .row'));
+            });
+
+            if (hasRowNode) {
+              state.lastTimerWindowTriggerAt = Date.now();
+              rzpLog('MinutnikObserver: TRIGGER (row-added)');
+              scheduleForcedTimerRefresh();
+              return;
+            }
+          }
 
           const currentSnapshot = readMinuteWindowTrackedTimers(trackedNpcNames);
           const shouldTrigger = shouldTriggerFromMinuteWindowSnapshot(currentSnapshot, trackedNpcNames);
@@ -2898,4 +2924,6 @@
   window.RZP_ADDONS_REGISTRY = window.RZP_ADDONS_REGISTRY || {};
   window.RZP_ADDONS_REGISTRY[ADDON_ID] = addonApi;
   window.__rzpRespRadarState = state;
+  window.__RZP_RADAR_BUILD = ADDON_BUILD;
+  rzpLog('script loaded | build:', ADDON_BUILD);
 })();
