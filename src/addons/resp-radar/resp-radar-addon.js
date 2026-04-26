@@ -585,6 +585,8 @@ function refreshView() {
 
 function tickTimers() {
     // Update displayed timers every second
+    // IMPORTANT: Calculate time dynamically from timestamps, don't mutate state
+    const now = Date.now();
     const timerElements = document.querySelectorAll('.resp-timer');
     
     timerElements.forEach((el) => {
@@ -602,22 +604,43 @@ function tickTimers() {
             }
         }
         
-        if (lootlogTimer && lootlogTimer.remainingSeconds !== undefined) {
-            lootlogTimer.remainingSeconds = Math.max(0, lootlogTimer.remainingSeconds - 1);
-            if (lootlogTimer.minRemainingSeconds !== undefined) {
-                lootlogTimer.minRemainingSeconds = Math.max(0, lootlogTimer.minRemainingSeconds - 1);
+        if (lootlogTimer) {
+            // Calculate remaining seconds from timestamps (don't mutate state)
+            let remainingSeconds = 0;
+            let minRemainingSeconds = 0;
+            
+            if (lootlogTimer.maxSpawnTime) {
+                const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
+                    ? lootlogTimer.maxSpawnTime 
+                    : Date.parse(lootlogTimer.maxSpawnTime);
+                if (maxTime) {
+                    remainingSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+                }
+            } else {
+                // Fallback to stored remainingSeconds (will drift)
+                remainingSeconds = lootlogTimer.remainingSeconds || 0;
             }
             
-            el.textContent = formatTime(lootlogTimer.remainingSeconds);
+            if (lootlogTimer.minSpawnTime) {
+                const minTime = typeof lootlogTimer.minSpawnTime === 'number'
+                    ? lootlogTimer.minSpawnTime
+                    : Date.parse(lootlogTimer.minSpawnTime);
+                if (minTime) {
+                    minRemainingSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+                }
+            } else {
+                minRemainingSeconds = lootlogTimer.minRemainingSeconds || 0;
+            }
+            
+            el.textContent = formatTime(remainingSeconds);
             
             // Update color for titans
             const mapName = getCurrentMapName();
             if (mapName && TITAN_DATA[mapName]) {
-                const minSeconds = lootlogTimer.minRemainingSeconds || 0;
                 const parentDiv = el.closest('div');
                 const labelSpan = parentDiv.querySelector('span:nth-child(3)');
                 
-                if (minSeconds > 0) {
+                if (minRemainingSeconds > 0) {
                     el.style.color = '#fff';
                     if (labelSpan) labelSpan.textContent = 'respi za';
                 } else {
@@ -626,7 +649,7 @@ function tickTimers() {
                 }
             }
             
-            if (lootlogTimer.remainingSeconds <= 0) {
+            if (remainingSeconds <= 0) {
                 el.textContent = 'ZRESPIŁ/A';
                 el.style.color = '#00ff88';
             }
@@ -639,12 +662,12 @@ function onStorageChange(e) {
     if (e.key === null || isLootlogStorageKey(e.key)) {
         rzpLog('Storage: Detected change in Lootlog storage, refreshing...');
         fetchLootlogTimers();
-        setTimeout(() => {
-            const mapName = getCurrentMapName();
-            if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
-                refreshView();
-            }
-        }, 1000);
+        // Refresh view immediately after fetching new timers
+        const mapName = getCurrentMapName();
+        if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
+            refreshView();
+            rzpLog('Storage: Forced refreshView() after storage change');
+        }
     }
 }
 
@@ -655,12 +678,12 @@ function checkStorageFingerprint() {
         if (newHash && state.lastStorageFingerprint && state.lastStorageFingerprint !== newHash) {
             rzpLog('Storage: Fingerprint changed, refreshing...');
             fetchLootlogTimers();
-            setTimeout(() => {
-                const mapName = getCurrentMapName();
-                if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
-                    refreshView();
-                }
-            }, 500);
+            // Refresh view immediately
+            const mapName = getCurrentMapName();
+            if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
+                refreshView();
+                rzpLog('Storage: Forced refreshView() after fingerprint change');
+            }
         }
         state.lastStorageFingerprint = newHash;
     } catch (e) {
