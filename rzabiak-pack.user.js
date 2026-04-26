@@ -22,19 +22,7 @@
   }
   window.__RZP_PANEL_LOADER_DONE = true;
 
-  // Globalnie wycisza logi konsoli na stronie gry.
-  (function silenceConsole() {
-    try {
-      const noop = function () {};
-      const target = unsafeWindow?.console || window.console;
-      if (!target) return;
-      target.log = noop;
-      target.warn = noop;
-      target.error = noop;
-      target.info = noop;
-      target.debug = noop;
-    } catch (error) {}
-  })();
+  // Debug note: console is intentionally NOT silenced so addon diagnostics stay visible.
 
   // Udostępnij loader omijający CSP dla panel-core.js
   unsafeWindow.__RZP_LOAD_MODULE = function (url, onload, onerror) {
