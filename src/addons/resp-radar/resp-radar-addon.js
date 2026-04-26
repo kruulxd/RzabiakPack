@@ -362,6 +362,11 @@
   const debugWarn = () => {};
   const debugError = () => {};
 
+  // ===== DIAGNOSTIC CONSOLE LOGGING (remove after debugging) =====
+  const RZP_DEBUG = true;
+  function rzpLog(...args) { if (RZP_DEBUG) console.log('[RZP-RADAR]', ...args); }
+  // ===============================================================
+
   function loadSettings() {
     try {
       const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}');
@@ -711,6 +716,16 @@
     // Network hook captured real timer data from Lootlog this session.
     if (state.networkMeta.capturedAt > 0) return true;
     return false;
+  }
+
+  function logLootlogAvailabilityDiag() {
+    rzpLog('isLootlogAvailable:', isLootlogAvailable(),
+      '| lootlogGameClientApi:', typeof window.lootlogGameClientApi,
+      '| networkMeta.capturedAt:', state.networkMeta.capturedAt,
+      '| networkMeta.timerCount:', state.networkMeta.timerCount,
+      '| apiMeta.capturedAt:', state.apiMeta.capturedAt,
+      '| diagnostics.source:', state.diagnostics.source
+    );
   }
 
   function isTimerLikeArray(node) {
@@ -1142,6 +1157,7 @@
       messageCount: state.networkMeta.messageCount || 0
     };
 
+    rzpLog('maybeCaptureNetworkTimers: captured', timerCount, 'timers from', meta?.source, meta?.url || '', '| names:', Object.keys(timers).slice(0, 10));
     savePersistedNetworkTimers(timers, now);
   }
 
@@ -1532,6 +1548,7 @@
           if (!shouldTrigger) continue;
 
           state.lastTimerWindowTriggerAt = Date.now();
+          rzpLog('MinutnikObserver: TRIGGER - new/renewed timer detected for', trackedNpcNames, '| snapshot:', currentSnapshot);
           scheduleForcedTimerRefresh();
           return;
         }
@@ -1678,8 +1695,10 @@
       const api = window.lootlogGameClientApi;
       if (!api || typeof api.getTimers !== 'function') {
         state.lastNetworkPollStatus = 'api-missing';
+        rzpLog('pollLootlogTimersApi: API missing | typeof lootlogGameClientApi:', typeof window.lootlogGameClientApi);
         return;
       }
+      rzpLog('pollLootlogTimersApi: calling api.getTimers()');
 
       const result = api.getTimers();
       if (result && typeof result.then === 'function') {
@@ -2206,12 +2225,19 @@
       state.diagnostics.networkTimerCount = networkTimerCount;
       state.diagnostics.persistedTimerCount = persistedTimerCount;
 
+      rzpLog('fetchLootlogTimers: network:', networkTimerCount, 'active:', hasActiveNetworkTimers,
+        '| persisted:', persistedTimerCount, 'active:', hasActivePersistedTimers,
+        '| lootlogAvailable:', isLootlogAvailable(),
+        '| warmupLeft:', Math.max(0, Math.round((state.warmupUntil - now) / 1000)) + 's'
+      );
+
       if (hasActiveNetworkTimers && networkTimerCount > 0) {
         state.lootlogTimers = fromNetwork;
         state.warmupUntil = 0;
         state.diagnostics.source = 'network';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
+        rzpLog('fetchLootlogTimers: source=network, timers:', Object.keys(fromNetwork));
         return;
       }
 
@@ -2222,6 +2248,7 @@
         state.lootlogTimers = {};
         state.warmupUntil = 0;
         state.diagnostics.source = 'lootlog-unavailable';
+        rzpLog('fetchLootlogTimers: Lootlog unavailable, clearing timers');
         return;
       }
 
@@ -2231,6 +2258,7 @@
         state.diagnostics.source = 'persisted';
         state.diagnostics.dom = null;
         state.diagnostics.domTimerCount = 0;
+        rzpLog('fetchLootlogTimers: source=persisted, timers:', Object.keys(fromPersisted));
         return;
       }
 
@@ -2674,6 +2702,12 @@
       // Never prefer minutnik time over Lootlog data.
       const lootlogUnavailable = state.diagnostics.source === 'lootlog-unavailable';
       const timer = timerFromState || (lootlogUnavailable ? getMinuteWindowTimerForNpc(npcName) : null);
+      rzpLog('refreshView NPC:', npcName,
+        '| source:', state.diagnostics.source,
+        '| timerFromState:', timerFromState ? timerFromState.remainingSeconds + 's' : 'null',
+        '| timer:', timer ? timer.remainingSeconds + 's' : 'null',
+        '| allTimerKeys:', Object.keys(state.lootlogTimers).slice(0, 10)
+      );
 
       if (timer) matchedCount += 1;
 
@@ -2824,6 +2858,8 @@
       state.warmupUntil = Date.now() + STARTUP_WARMUP_MS;
       state.lastDataRefreshAt = 0;
       state.lastNetworkPollAt = 0;
+      rzpLog('enable: starting, warmupUntil:', new Date(state.warmupUntil).toISOString());
+      logLootlogAvailabilityDiag();
       ensureNetworkTimerHook();
       startLootlogStorageWatcher();
       enableTimerWindowRefreshHook();
