@@ -1,15 +1,15 @@
 // =============================================================================
-// RESP-RADAR ADDON - MINIMAL VERSION (based on working Iledoe2 standalone)
+// RESP-RADAR ADDON - API VERSION (using Lootlog Public API)
 // =============================================================================
-// Simplified architecture:
-// 1. Read Lootlog from localStorage (parseTimersFromLootlogStorage)
-// 2. Storage event listener as main trigger
-// 3. Fingerprint polling every 10s as backup trigger
+// Architecture:
+// 1. PRIMARY: Read timers from window.lootlogGameClientApi.getTimers() 
+// 2. FALLBACK: Read from localStorage if API unavailable
+// 3. Use api.subscribe('timers:changed', ...) for real-time updates
 // 4. Render timer in panel div
 // =============================================================================
 
 const ADDON_NAME = 'resp-radar';
-const ADDON_BUILD = '2026-04-26-minimal-v3';
+const ADDON_BUILD = '2026-04-26-api-v4';
 
 // Debug logging
 const RZP_DEBUG = true;
@@ -373,6 +373,73 @@ function parseTimersFromLootlogStorage(world) {
     return parsedTimers;
 }
 
+function parseTimersFromAPI(world) {
+    // NEW: Use Lootlog Public API as primary source
+    const now = Date.now();
+    const parsedTimers = {};
+
+    try {
+        const api = window.lootlogGameClientApi;
+        if (!api || !api.getTimers) {
+            rzpLog('API: window.lootlogGameClientApi NOT available - falling back to localStorage');
+            return null;
+        }
+
+        if (!api.ready) {
+            rzpLog('API: Not ready yet');
+            return null;
+        }
+
+        const timers = api.getTimers({ world });
+        if (!timers || !Array.isArray(timers)) {
+            rzpLog('API: getTimers() returned no data');
+            return null;
+        }
+
+        rzpLog(`API: Got ${timers.length} timers from lootlogGameClientApi.getTimers({ world: '${world}' })`);
+
+        timers.forEach((timer) => {
+            if (!timer || typeof timer !== 'object') return;
+
+            const npc = timer.npc;
+            if (!npc) return;
+
+            const type = normalizeNpcType(npc.type);
+            const name = npc.name;
+
+            if (!type || !name) return;
+
+            let minTime = toTimestamp(timer.minSpawnTime);
+            let maxTime = toTimestamp(timer.maxSpawnTime);
+
+            if (maxTime === null) return;
+            if (minTime === null) minTime = maxTime;
+
+            const normalized = {
+                name,
+                type,
+                remainingSeconds: Math.max(0, Math.floor((maxTime - now) / 1000)),
+                minRemainingSeconds: Math.max(0, Math.floor((minTime - now) / 1000)),
+                minSpawnTime: timer.minSpawnTime,
+                maxSpawnTime: timer.maxSpawnTime,
+                location: npc.location || null,
+                addedByName: timer.member?.name || null
+            };
+
+            const existing = parsedTimers[name];
+            if (!existing || normalized.remainingSeconds < existing.remainingSeconds) {
+                parsedTimers[name] = normalized;
+            }
+        });
+
+        rzpLog(`API: Parsed ${Object.keys(parsedTimers).length} timers`);
+        return parsedTimers;
+    } catch (e) {
+        rzpLog('API: ERROR parsing timers:', e);
+        return null;
+    }
+}
+
 // =============================================================================
 // GAME UTILITIES
 // =============================================================================
@@ -425,7 +492,8 @@ const state = {
     storagePollingIntervalId: null,
     mapCheckIntervalId: null,
     timerRefreshIntervalId: null,
-    tickIntervalId: null
+    tickIntervalId: null,
+    apiUnsubscribe: null // NEW: for API subscription cleanup
 };
 
 // =============================================================================
@@ -434,17 +502,27 @@ const state = {
 
 function fetchLootlogTimers() {
     try {
-        rzpLog('Fetching timers from Lootlog localStorage...');
-        
         state.lootlogTimers = {};
         state.currentWorld = getWorld();
 
-        const parsedTimers = parseTimersFromLootlogStorage(state.currentWorld);
-        Object.values(parsedTimers).forEach((timer) => {
-            state.lootlogTimers[timer.name] = timer;
-        });
-
-        rzpLog(`FetchLootlog: Got ${Object.keys(state.lootlogTimers).length} timers`);
+        rzpLog('=== Fetching timers ===');
+        
+        // Try API first (PRIMARY)
+        const apiTimers = parseTimersFromAPI(state.currentWorld);
+        if (apiTimers !== null) {
+            Object.values(apiTimers).forEach((timer) => {
+                state.lootlogTimers[timer.name] = timer;
+            });
+            rzpLog(`FetchLootlog: Got ${Object.keys(state.lootlogTimers).length} timers from API`);
+        } else {
+            // Fallback to localStorage
+            rzpLog('FetchLootlog: API unavailable, using localStorage fallback');
+            const storageTimers = parseTimersFromLootlogStorage(state.currentWorld);
+            Object.values(storageTimers).forEach((timer) => {
+                state.lootlogTimers[timer.name] = timer;
+            });
+            rzpLog(`FetchLootlog: Got ${Object.keys(state.lootlogTimers).length} timers from localStorage`);
+        }
         
         // Debug: print timer names
         if (Object.keys(state.lootlogTimers).length > 0) {
@@ -766,15 +844,52 @@ function enable() {
     // Initial fetch
     fetchLootlogTimers();
     
-    // Storage event listener (main trigger - NOTE: doesn't work in same window!)
+    // Try to subscribe to Lootlog API events (PRIMARY trigger)
+    try {
+        const api = window.lootlogGameClientApi;
+        if (api && api.subscribe) {
+            state.apiUnsubscribe = api.subscribe('timers:changed', (event) => {
+                rzpLog(`API: timers:changed event - world: ${event.world}, guildId: ${event.guildId}, timers: ${event.timers?.length || 0}`);
+                
+                // Only refresh if it's our world
+                if (event.world === state.currentWorld) {
+                    const timerCountBefore = Object.keys(state.lootlogTimers).length;
+                    rzpLog(`API: Event for our world (${event.world}), refreshing... Timers before: ${timerCountBefore}`);
+                    
+                    fetchLootlogTimers();
+                    
+                    const timerCountAfter = Object.keys(state.lootlogTimers).length;
+                    rzpLog(`API: Timers after: ${timerCountAfter} (change: ${timerCountAfter - timerCountBefore})`);
+                    
+                    // Refresh view immediately
+                    const mapName = getCurrentMapName();
+                    if (mapName && (ELITE_II_DATA[mapName] || TITAN_DATA[mapName])) {
+                        refreshView();
+                        rzpLog('API: Forced refreshView() after API event');
+                    }
+                }
+            });
+            rzpLog('API: Subscribed to timers:changed events (PRIMARY TRIGGER)');
+        } else {
+            rzpLog('API: window.lootlogGameClientApi.subscribe NOT available - using localStorage polling');
+            
+            // Fallback: Fingerprint polling if API not available
+            state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 2000);
+            rzpLog('Fallback: Started fingerprint polling (2s)');
+        }
+    } catch (e) {
+        rzpLog('API: ERROR subscribing to events:', e);
+        
+        // Fallback: Fingerprint polling on error
+        state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 2000);
+        rzpLog('Fallback: Started fingerprint polling (2s)');
+    }
+    
+    // Storage event listener (backup trigger - works only in other tabs/windows)
     window.addEventListener('storage', onStorageChange);
-    rzpLog('Attached storage event listener (NOTE: only works for OTHER tabs/windows)');
+    rzpLog('Attached storage event listener (backup - only works for OTHER tabs/windows)');
     
-    // Fingerprint polling (PRIMARY trigger - every 2s because storage event doesn't work in same window)
-    state.storagePollingIntervalId = setInterval(checkStorageFingerprint, 2000);
-    rzpLog('Started fingerprint polling (2s) - PRIMARY TRIGGER');
-    
-    // Timer refresh polling (every 20s)
+    // Timer refresh polling (every 20s - keep existing timers fresh)
     state.timerRefreshIntervalId = setInterval(fetchLootlogTimers, 20000);
     rzpLog('Started timer refresh polling (20s)');
     
@@ -798,6 +913,17 @@ function disable() {
     rzpLog('=== ADDON DISABLE ===');
     
     state.enabled = false;
+    
+    // Unsubscribe from API events
+    if (state.apiUnsubscribe) {
+        try {
+            state.apiUnsubscribe();
+            state.apiUnsubscribe = null;
+            rzpLog('API: Unsubscribed from timers:changed events');
+        } catch (e) {
+            rzpLog('API: ERROR unsubscribing:', e);
+        }
+    }
     
     // Remove storage listener
     window.removeEventListener('storage', onStorageChange);
