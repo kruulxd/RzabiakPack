@@ -318,101 +318,82 @@
 
   function refreshView() {
     const mapName = getCurrentMapName();
-    if (!mapName) return;
-
-    if (mapName !== state.currentMapName) {
-      state.currentMapName = mapName;
-    }
-
     const eliteData = ELITE_II_DATA[mapName];
     const titanData = TITAN_DATA[mapName];
     const npcData = eliteData || titanData;
     const npcType = titanData ? 'TITAN' : 'ELITE2';
-
-    const container = document.getElementById(CONTAINER_ID);
-    if (!npcData) {
-      if (container) container.style.display = 'none';
-      return;
-    }
-
-    const npcNames = npcData.split('/').map(n => n.trim());
+    const container = ensureContainer();
     let html = '';
-
-    npcNames.forEach((npcName) => {
-      let lootlogTimer = null;
-
-      if (state.lootlogTimers[npcName]) {
-        lootlogTimer = state.lootlogTimers[npcName];
-      } else {
-        for (const key in state.lootlogTimers) {
-          if (key.includes(npcName) || npcName.includes(key)) {
-            lootlogTimer = state.lootlogTimers[key];
-            break;
+    if (!mapName) {
+      html = `<div class="timer-row"><span class="timer-empty">Nie można wykryć mapy</span></div>`;
+    } else if (!npcData) {
+      html = `<div class="timer-row"><span class="timer-empty">Brak obsługi dla tej mapy: <b>${mapName}</b></span></div>`;
+    } else {
+      const npcNames = npcData.split('/').map(n => n.trim());
+      npcNames.forEach((npcName) => {
+        let lootlogTimer = null;
+        if (state.lootlogTimers[npcName]) {
+          lootlogTimer = state.lootlogTimers[npcName];
+        } else {
+          for (const key in state.lootlogTimers) {
+            if (key.includes(npcName) || npcName.includes(key)) {
+              lootlogTimer = state.lootlogTimers[key];
+              break;
+            }
           }
         }
-      }
-
-      const nameColor = npcType === 'TITAN' ? '#ff3333' : '#ff6b9d';
-
-      if (lootlogTimer) {
-        const now = Date.now();
-        let totalSeconds = 0;
-        let minSeconds = 0;
-
-        if (lootlogTimer.maxSpawnTime) {
-          const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
-            ? lootlogTimer.maxSpawnTime 
-            : Date.parse(lootlogTimer.maxSpawnTime);
-          if (maxTime) {
-            totalSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+        const titan = npcType === 'TITAN';
+        if (lootlogTimer) {
+          const now = Date.now();
+          let totalSeconds = 0;
+          let minSeconds = 0;
+          if (lootlogTimer.maxSpawnTime) {
+            const maxTime = typeof lootlogTimer.maxSpawnTime === 'number' 
+              ? lootlogTimer.maxSpawnTime 
+              : Date.parse(lootlogTimer.maxSpawnTime);
+            if (maxTime) {
+              totalSeconds = Math.max(0, Math.floor((maxTime - now) / 1000));
+            }
           }
-        }
-
-        if (lootlogTimer.minSpawnTime) {
-          const minTime = typeof lootlogTimer.minSpawnTime === 'number'
-            ? lootlogTimer.minSpawnTime
-            : Date.parse(lootlogTimer.minSpawnTime);
-          if (minTime) {
-            minSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+          if (lootlogTimer.minSpawnTime) {
+            const minTime = typeof lootlogTimer.minSpawnTime === 'number'
+              ? lootlogTimer.minSpawnTime
+              : Date.parse(lootlogTimer.minSpawnTime);
+            if (minTime) {
+              minSeconds = Math.max(0, Math.floor((minTime - now) / 1000));
+            }
           }
-        }
-
-        let timerColor = '#00ff88';
-        let labelText = 'respi za';
-
-        if (npcType === 'TITAN') {
-          if (minSeconds > 0) {
-            timerColor = '#fff';
-            labelText = 'respi za';
-          } else {
-            timerColor = '#ffa500';
-            labelText = 'respi jeszcze przez';
+          let labelText = 'respi za';
+          let valueClass = 'timer-value';
+          if (titan) {
+            if (minSeconds > 0) {
+              labelText = 'respi za';
+            } else {
+              labelText = 'respi jeszcze przez';
+            }
+            valueClass += ' titan';
           }
+          html += `
+            <div class="timer-row">
+              <span class="timer-name${titan ? ' titan' : ''}\">${npcName}</span>
+              <span class="timer-sep">-</span>
+              <span class="timer-label">${labelText}</span>
+              <span data-npc="${npcName}" class="${valueClass}\">${formatTime(totalSeconds)}</span>
+            </div>
+          `;
+        } else {
+          html += `
+            <div class="timer-row">
+              <span class="timer-name${titan ? ' titan' : ''}\">${npcName}</span>
+              <span class="timer-sep">-</span>
+              <span class="timer-empty">brak na timerze</span>
+            </div>
+          `;
         }
-
-        html += `
-          <div class="timer-row">
-            <span class="timer-name" style="color: ${nameColor};">${npcName}</span>
-            <span class="timer-sep">-</span>
-            <span class="timer-label">${labelText}</span>
-            <span data-npc="${npcName}" class="timer-value" style="color: ${timerColor};">${formatTime(totalSeconds)}</span>
-          </div>
-        `;
-      } else {
-        html += `
-          <div class="timer-row">
-            <span class="timer-name" style="color: ${nameColor};">${npcName}</span>
-            <span class="timer-sep">-</span>
-            <span class="timer-empty">brak na timerze</span>
-          </div>
-        `;
-      }
-    });
-
-    if (container) {
-      container.innerHTML = html;
-      container.style.display = 'block';
+      });
     }
+    container.innerHTML = html;
+    container.style.display = state.visible ? 'block' : 'none';
   }
 
   function tickTimers() {
@@ -479,194 +460,92 @@
     });
   }
 
-  /* --- Styles ------------------------------------------------- */
+  /* --- Container (toast notification pattern) --- */
+  function ensureContainer() {
+    let container = document.getElementById(CONTAINER_ID);
+    if (!container) {
+      ensureStyle();
+      container = document.createElement('div');
+      container.id = CONTAINER_ID;
+      // Toast: always above, prefer #GAME_CANVAS parent, fallback to body
+      const canvas = document.getElementById('GAME_CANVAS');
+      if (canvas && canvas.parentElement) {
+        canvas.parentElement.appendChild(container);
+      } else {
+        document.body.appendChild(container);
+      }
+    }
+    // Toast: fixed position, always visible if enabled
+    container.style.position = 'fixed';
+    container.style.zIndex = 14;
+    container.style.left = '50%';
+    container.style.bottom = '60px';
+    container.style.top = 'auto';
+    container.style.right = 'auto';
+    container.style.transform = 'translateX(-50%)';
+    container.style.display = state.visible ? 'block' : 'none';
+    return container;
+  }
+
+  /* --- Styles (toast notification) --- */
   function ensureStyle() {
     if (document.getElementById(STYLE_ID)) return;
-
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
       #${CONTAINER_ID} {
-        position: absolute;
-        z-index: 5;
-        min-width: 280px;
+        min-width: 220px;
         max-width: 400px;
-        border-radius: 12px;
-        border: 1px solid rgba(52,211,100,0.18);
-        background: linear-gradient(160deg, rgba(6,16,9,0.98), rgba(4,12,7,0.99));
-        box-shadow:
-          0 0 0 1px rgba(34,197,94,0.06) inset,
-          0 16px 40px rgba(0,0,0,0.65),
-          0 0 24px rgba(34,197,94,0.04);
-        color: #c8ead4;
+        border-radius: 10px;
+        background: rgba(18,32,22,0.98);
+        box-shadow: 0 6px 32px 0 rgba(0,0,0,0.45), 0 0 0 1.5px #34d36444;
+        color: #eafff0;
         font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
-        font-size: 13px;
-        padding: 12px;
+        font-size: 14px;
+        padding: 10px 18px;
         user-select: none;
         pointer-events: auto;
+        text-align: center;
+        opacity: 0.98;
       }
-
       #${CONTAINER_ID} .timer-row {
         display: flex;
         align-items: center;
+        justify-content: center;
         gap: 8px;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
       }
-
       #${CONTAINER_ID} .timer-row:last-child {
         margin-bottom: 0;
       }
-
       #${CONTAINER_ID} .timer-name {
-        font-weight: 600;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        font-weight: 700;
+        color: #ff6b9d;
+        text-shadow: 0 1px 2px #000a;
       }
-
+      #${CONTAINER_ID} .timer-name.titan {
+        color: #ff3333;
+      }
       #${CONTAINER_ID} .timer-sep {
         color: #555;
       }
-
       #${CONTAINER_ID} .timer-label {
         color: #a0c0a8;
       }
-
       #${CONTAINER_ID} .timer-value {
         font-weight: 700;
-        text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+        text-shadow: 0 1px 3px #000c;
         font-family: 'Courier New', monospace;
+        color: #00ff88;
       }
-
+      #${CONTAINER_ID} .timer-value.titan {
+        color: #ffa500;
+      }
       #${CONTAINER_ID} .timer-empty {
         color: #666;
         font-style: italic;
       }
-
-      #${SETTINGS_ID} {
-        position: fixed;
-        z-index: 20;
-        min-width: 360px;
-        border-radius: 12px;
-        border: 1px solid rgba(52,211,100,0.18);
-        background: linear-gradient(160deg, rgba(6,16,9,0.98), rgba(4,12,7,0.99));
-        box-shadow:
-          0 0 0 1px rgba(34,197,94,0.06) inset,
-          0 16px 40px rgba(0,0,0,0.65),
-          0 0 24px rgba(34,197,94,0.04);
-        color: #c8ead4;
-        font-family: 'Trebuchet MS', Tahoma, Verdana, sans-serif;
-        font-size: 13px;
-        user-select: none;
-        display: none;
-        overflow: hidden;
-      }
-
-      #${SETTINGS_ID} .header {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 9px 12px 8px;
-        background: rgba(0,0,0,0.2);
-        border-bottom: 1px solid rgba(52,211,100,0.12);
-        cursor: move;
-      }
-
-      #${SETTINGS_ID} .header::before {
-        content: '';
-        display: inline-block;
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: #22c55e;
-        opacity: 0.7;
-        flex-shrink: 0;
-      }
-
-      #${SETTINGS_ID} .header-title {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.4px;
-        color: #c8ead4;
-        flex: 1;
-      }
-
-      #${SETTINGS_ID} .close-btn {
-        margin-left: auto;
-        width: 18px;
-        height: 18px;
-        border-radius: 4px;
-        border: 1px solid rgba(52,211,100,0.18);
-        background: rgba(0,0,0,0.2);
-        color: #3d6647;
-        font-size: 11px;
-        line-height: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        flex-shrink: 0;
-        transition: background 0.15s, color 0.15s, border-color 0.15s;
-        font-family: inherit;
-        padding: 0;
-      }
-
-      #${SETTINGS_ID} .close-btn:hover {
-        background: rgba(239,68,68,0.18);
-        border-color: rgba(239,68,68,0.35);
-        color: #f87171;
-      }
-
-      #${SETTINGS_ID} .content {
-        padding: 10px 12px 12px;
-        font-size: 11px;
-      }
-
-      #${SETTINGS_ID} .setting-group {
-        margin-bottom: 14px;
-      }
-
-      #${SETTINGS_ID} .setting-group:last-child {
-        margin-bottom: 0;
-      }
-
-      #${SETTINGS_ID} .setting-label {
-        color: #4a7a54;
-        font-size: 11px;
-        margin-bottom: 8px;
-        display: block;
-      }
-
-      #${SETTINGS_ID} .position-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 6px;
-      }
-
-      #${SETTINGS_ID} .position-btn {
-        cursor: pointer;
-        padding: 8px 6px;
-        border-radius: 7px;
-        background: rgba(52,211,100,0.08);
-        border: 1px solid rgba(52,211,100,0.2);
-        color: #c8ead4;
-        text-align: center;
-        font-size: 10px;
-        transition: all 0.2s;
-        line-height: 1.3;
-      }
-
-      #${SETTINGS_ID} .position-btn:hover {
-        background: rgba(52,211,100,0.15);
-        border-color: rgba(52,211,100,0.35);
-      }
-
-      #${SETTINGS_ID} .position-btn.active {
-        background: rgba(52,211,100,0.25);
-        border-color: rgba(52,211,100,0.5);
-        color: #34d364;
-        font-weight: 600;
-      }
     `;
-
     document.head.appendChild(style);
   }
 
@@ -791,69 +670,6 @@
       container.style.bottom = pos.bottom;
       container.style.left = pos.left;
       container.style.transform = pos.transform;
-    }
-  }
-
-  /* --- Container ---------------------------------------------- */
-  function ensureContainer() {
-    let container = document.getElementById(CONTAINER_ID);
-    const canvas = document.getElementById('GAME_CANVAS');
-
-    if (!container && canvas) {
-      ensureStyle();
-
-      container = document.createElement('div');
-      container.id = CONTAINER_ID;
-      canvas.parentElement.appendChild(container);
-    }
-
-    if (container) {
-      const pos = POSITIONS[state.position];
-      container.style.top = pos.top;
-      container.style.right = pos.right;
-      container.style.bottom = pos.bottom;
-      container.style.left = pos.left;
-      container.style.transform = pos.transform;
-      container.style.display = state.visible ? 'block' : 'none';
-    }
-
-    return container;
-  }
-
-  /* --- Visibility --------------------------------------------- */
-  function showTimer() {
-    state.visible = true;
-    saveVisible(true);
-    const container = document.getElementById(CONTAINER_ID);
-    if (container) container.style.display = 'block';
-    updateDockGlow();
-    refreshView();
-  }
-
-  function hideTimer() {
-    state.visible = false;
-    saveVisible(false);
-    const container = document.getElementById(CONTAINER_ID);
-    if (container) container.style.display = 'none';
-    updateDockGlow();
-  }
-
-  function toggleTimer() {
-    if (state.visible) {
-      hideTimer();
-    } else {
-      showTimer();
-    }
-  }
-
-  function updateDockGlow() {
-    const dockBtn = document.querySelector(`[data-addon-id="${ADDON_ID}"]`);
-    if (!dockBtn) return;
-
-    if (state.visible && state.enabled) {
-      dockBtn.classList.add('glow-active');
-    } else {
-      dockBtn.classList.remove('glow-active');
     }
   }
 
