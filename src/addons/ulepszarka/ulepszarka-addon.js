@@ -179,22 +179,18 @@
     },
 
     async runWidget() {
+      // LPM w docku lub lista dodatków: otwórz okno ustawień bezpośrednio
       await this.enable();
-
-      const api = getCoreApi();
-      if (api?.toggleWidgetLauncher) {
-        api.toggleWidgetLauncher();
-        return true;
-      }
-
-      toggleLauncherFallback();
+      const win = ensureSettingsWin();
+      win.classList.remove('hidden');
       return true;
     },
 
     async openSettings() {
+      // Zawsze otwieraj okno ustawień bezpośrednio
       await this.enable();
       const win = ensureSettingsWin();
-      win.classList.toggle('hidden');
+      win.classList.remove('hidden');
       return true;
     }
   };
