@@ -253,12 +253,7 @@
     },
 
     runWidget() {
-      // LPM w docku: przełącz aktywność + toast + glow
-      if (state.active) {
-        deactivate();
-      } else {
-        activate();
-      }
+      if (state.active) deactivate(); else activate();
     },
 
     openSettings() {

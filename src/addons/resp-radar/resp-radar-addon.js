@@ -782,10 +782,8 @@
     enable,
     disable,
     getState: () => state,
-    // LPM w docku lub lista dodatków: otwórz okno ustawień bezpośrednio
-    runWidget: function() { openSettings(); },
-    // Zawsze otwieraj okno ustawień bezpośrednio
-    openSettings: function() { openSettings(); },
+    runWidget,
+    openSettings,
     closeSettings,
     toggleDock
   };
